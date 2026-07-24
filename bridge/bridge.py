@@ -16,6 +16,9 @@ pwm_der   = PWMOutputDevice(24, initial_value=1)
 BROKER = "localhost"
 mode   = "idle"
 geofence_points = []
+blade_on = False
+trimmer_on = False
+charging = False
 
 def set_speed(speed):
     pwm_izq.value = max(0.0, min(1.0, speed))
@@ -39,9 +42,21 @@ def on_connect(client, userdata, flags, reason_code, properties):
     client.subscribe("robot/cmd/move", qos=0)
     client.subscribe("robot/cmd/mode", qos=1)
     client.subscribe("robot/cmd/geofence", qos=1)
+    client.subscribe("robot/cmd/actuator", qos=1)
+
+def publish_status(client):
+    status = {
+        "mode": mode,
+        "battery": get_battery(),
+        "alert": "none",
+        "blade": blade_on,
+        "trimmer": trimmer_on,
+        "charging": charging,
+    }
+    client.publish("robot/status", json.dumps(status), qos=1)
 
 def on_message(client, userdata, msg):
-    global mode, geofence_points
+    global mode, geofence_points, blade_on, trimmer_on, charging
     payload = json.loads(msg.payload.decode())
 
     if msg.topic == "robot/cmd/move" and mode == "manual":
@@ -52,12 +67,20 @@ def on_message(client, userdata, msg):
         print(f"Modo: {mode}")
         if mode in ("stop", "idle"):
             move("stop", 0)
-        status = {"mode": mode, "battery": get_battery(), "alert": "none"}
-        client.publish("robot/status", json.dumps(status), qos=1)
+        publish_status(client)
 
     elif msg.topic == "robot/cmd/geofence":
         geofence_points = payload.get("points", [])
         print(f"Geofence recibido: {len(geofence_points)} puntos")
+
+    elif msg.topic == "robot/cmd/actuator":
+        # TODO: sin pines asignados aun para cuchilla/trimmer/rele de carga;
+        # por ahora solo se rastrea y confirma el estado, como get_battery().
+        blade_on = payload.get("blade", False)
+        trimmer_on = payload.get("trimmer", False)
+        charging = payload.get("charging", False)
+        print(f"Actuadores: blade={blade_on} trimmer={trimmer_on} charging={charging}")
+        publish_status(client)
 
 def get_battery():
     # Reemplazar con lectura real de ADC si se tiene sensor de batería
