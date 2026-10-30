@@ -473,6 +473,162 @@ def run_coverage():
     check(len(c.pubs['follower/path'].last.poses) == 0, 'shutdown: borra la ruta')
 
 
+def run_random_and_perimeter():
+    print('\n[6] random_walk y perimeter con fake_robot en un cuarto, pasando por el safety_gate')
+    import yaml
+    from lawnbot_nav.fake_robot import FakeRobot
+    from lawnbot_nav.geofence_logic import signed_distance
+    from lawnbot_nav.perimeter import Perimeter
+    from lawnbot_nav.random_walk import RandomWalk
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
+    room, rw_cfg, pm_cfg, gate_cfg = (load('sim_room.yaml', 'fake_robot'), load('random_walk.yaml', 'random_walk'),
+                                      load('perimeter.yaml', 'perimeter'), load('safety_gate.yaml', 'safety_gate'))
+    fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+
+    robot_node = make(FakeRobot, **dict(room, x=3.0, y=2.0))      # lejos de la franja del borde
+    rw = make(RandomWalk, **dict(rw_cfg, seed=5, edge_distance=1.0))
+    pm = make(Perimeter, **pm_cfg)
+    gate = make(SafetyGate, **gate_cfg)
+    nodes = (rw, pm)
+    fake_tick, sensors_tick = robot_node.timer(0.02), robot_node.timer(0.2)
+    rw_tick, pm_tick, gate_tick = rw.timer(0.05), pm.timer(0.05), gate.timer(0.05)
+    robot_cmd = robot_node.subs['cmd_vel']
+    st = {'mode': None, 'last_mode': -1, 'sent': {}, 'next_sensor': 0.0, 'next_fence': 0.0, 'fence': False,
+          'bumper_presses': 0, 'min_gap': 99.0, 'next_ctrl': R.MONO['t']}
+    xy = []
+
+    def set_mode(name):
+        st['mode'], st['last_mode'] = name, int(R.MONO['t'])
+        for n in nodes:
+            n.subs['nav/active_mode'](R.String(name))
+
+    def new_msgs(pub, key):
+        sent = pub.sent
+        out = sent[st['sent'].get(key, 0):]
+        st['sent'][key] = len(sent)
+        return out
+
+    def deliver_sensors():
+        for name, pub in robot_node.sonar_pubs.items():
+            for m in new_msgs(pub, f'sonar/{name}'):
+                for n in (rw, pm, gate):
+                    if f'sonar/{name}' in n.subs:
+                        n.subs[f'sonar/{name}'](m)
+        for name, pub in robot_node.bumper_pubs.items():
+            for m in new_msgs(pub, name):
+                st['bumper_presses'] += bool(m.data)
+                for n in (rw, pm, gate):
+                    if name in n.subs:
+                        n.subs[name](m)
+
+    def step(dt=0.02):
+        R.advance(dt)
+        t = R.MONO['t']
+        if st['mode'] and int(t) != st['last_mode']:
+            set_mode(st['mode'])
+        fake_tick()
+        if t >= st['next_sensor']:
+            sensors_tick()
+            deliver_sensors()
+            st['next_sensor'] = t + 0.2
+        if t >= st['next_fence']:
+            r = robot_node.robot
+            if st['fence']:
+                rw.subs['geofence/status'](R.String('OK'))
+                rw.subs['geofence/distance_to_edge'](R.Float32(signed_distance((r.x, r.y), fence)))
+            st['next_fence'] = t + 0.1
+        if t >= st['next_ctrl']:                         # los tres nodos corren a 20 Hz
+            st['next_ctrl'] += 0.05
+            rw_tick()
+            pm_tick()
+            for key, node, topic in (('rw', rw, 'cmd_vel_random'), ('pm', pm, 'cmd_vel_perimeter')):
+                for m in new_msgs(node.pubs[topic], key):
+                    gate.subs['cmd_vel_mux'](m)         # twist_mux: lo que llega pasa al gate
+            pub = gate.pubs['cmd_vel']
+            n0 = len(pub.sent)
+            gate_tick()
+            for m in pub.sent[n0:]:
+                robot_cmd(m)
+        r = robot_node.robot
+        xy.append((r.x, r.y))
+        st['min_gap'] = min(st['min_gap'], robot_node.world.distance((r.x, r.y)))
+
+    def run(seconds):
+        for _ in range(int(seconds / 0.02)):
+            step()
+
+    count = lambda node, topic: len(node.pubs[topic].sent)   # noqa: E731
+    set_mode('idle')
+    run(2.0)
+    check(count(rw, 'cmd_vel_random') == 0 and count(pm, 'cmd_vel_perimeter') == 0,
+          'fuera de su modo ninguno de los dos publica nada')
+
+    # random_walk sin cerco: no se mueve y avisa
+    set_mode('auto_random')
+    run(3.0)
+    r = robot_node.robot
+    check(math.dist((r.x, r.y), (3.0, 2.0)) < 0.05, 'auto_random sin cerco OK: el robot no se mueve')
+    check(any(m.data == 'random:geofence_not_ready' for m in rw.pubs['nav/alert_in'].sent), '   avisa geofence_not_ready por /nav/alert_in')
+
+    st['fence'] = True
+    n0 = count(rw, 'cmd_vel_random')
+    start_bumpers = st['bumper_presses']
+    run(300.0)
+    published = count(rw, 'cmd_vel_random') - n0
+    check(5800 <= published <= 6200, f'con el cerco OK navega: {published} ordenes en 300 s (~20 Hz)')
+    cells = {(int(x), int(y)) for x, y in xy}
+    check(len(cells) >= 18, f'recorre el cuarto: {len(cells)} celdas de 1 m visitadas')
+    check(st['bumper_presses'] == start_bumpers, 'los sonares frenan antes del contacto: ningun bumper presionado')
+    check(st['min_gap'] > 0.03, f'nunca toca una pared ni obstaculo (distancia minima {st["min_gap"]:.2f} m)')
+    check(min(signed_distance(p, fence) for p in xy) > 0.0, 'nunca sale del cerco')
+    check(count(pm, 'cmd_vel_perimeter') == 0, 'perimeter sigue en silencio durante auto_random')
+    cmd_sent = [m for m in gate.pubs['cmd_vel'].sent]
+    check(max(abs(m.linear.x) for m in cmd_sent) <= 0.5 + 1e-9, 'todo paso por el safety_gate (unico publicador de cmd_vel)')
+
+    # cambio de modo: random se apaga con ceros y perimeter arranca
+    set_mode('auto_perimeter')
+    run(1.0)
+    tail = rw.pubs['cmd_vel_random'].sent[-3:]
+    check(all(m.linear.x == 0 and m.angular.z == 0 for m in tail), 'al salir de auto_random publica ceros')
+    n_rw = count(rw, 'cmd_vel_random')
+    robot_node.robot.x, robot_node.robot.y, robot_node.robot.yaw, robot_node.robot.v, robot_node.robot.w = 2.0, 1.0, 0.0, 0.0, 0.0
+    xy.clear()
+    st['min_gap'] = 99.0
+    start_bumpers = st['bumper_presses']
+    run(150.0)
+    check(count(rw, 'cmd_vel_random') == n_rw, 'random_walk no publica mas')
+    path_len = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
+    check(path_len > 15.0, f'perimeter avanza siguiendo el borde: {path_len:.1f} m recorridos')
+    check(st['min_gap'] > 0.03, f'sin choques (distancia minima {st["min_gap"]:.2f} m)')
+    check(st['bumper_presses'] - start_bumpers <= 2, f'bumpers presionados: {st["bumper_presses"] - start_bumpers}')
+    check(pm.pubs['cmd_vel_perimeter'].last is not None and max(abs(m.linear.x) for m in pm.pubs['cmd_vel_perimeter'].sent) <= 0.15 + 1e-9,
+          'velocidad lineal de perimeter <= 0,15 m/s')
+
+    set_mode('stop')
+    run(1.0)
+    tail = pm.pubs['cmd_vel_perimeter'].sent[-3:]
+    check(all(m.linear.x == 0 and m.angular.z == 0 for m in tail), 'al salir de auto_perimeter publica ceros')
+    rw.shutdown_cleanup()
+    pm.shutdown_cleanup()
+    check(all(m.linear.x == 0 for m in rw.pubs['cmd_vel_random'].sent[-5:] + pm.pubs['cmd_vel_perimeter'].sent[-5:]),
+          'shutdown: ambos publican cero')
+
+    # sonar lateral mal orientado: se niega a arrancar y avisa
+    bad = make(Perimeter, **dict(pm_cfg, side_sonar_angle_deg=0.0))
+    bad.subs['nav/active_mode'](R.String('auto_perimeter'))
+    for s_ in ('left', 'center', 'right'):
+        bad.subs[f'sonar/{s_}'](R.Range(1.5))
+    for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+        bad.subs[b_](R.Bool(False))
+    R.advance(0.1)
+    bad.timer(0.05)()
+    check(bad.pubs['cmd_vel_perimeter'].last.linear.x == 0.0 and
+          bad.pubs['nav/alert_in'].last.data == 'perimeter:perimeter_misconfigured',
+          'sonar lateral a 0 grados: no arranca y avisa perimeter_misconfigured')
+
+
 FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
 L_SHAPE = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)]
 
@@ -495,4 +651,5 @@ if __name__ == '__main__':
     run_follower_auto()
     run_gate_alerts()
     run_coverage()
+    run_random_and_perimeter()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

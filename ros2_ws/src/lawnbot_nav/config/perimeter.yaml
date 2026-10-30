@@ -1,0 +1,36 @@
+perimeter:
+  ros__parameters:
+    rate_hz: 20.0
+    sensor_timeout: 1.0
+    side: right                    # lado de la pared: left | right (bumper B3 / B4 y sonar lateral de ese lado)
+    linear: 0.15                   # m/s
+    max_angular: 0.5               # rad/s
+    target_distance: 0.30          # m, distancia lateral sonar-pared (no menos: el gate frena con un sonar < 0,30 m)
+    kp: 1.5
+    # IMPORTANTE: en el URDF los tres sonares miran al frente (rpy 0). El seguimiento por distancia
+    # necesita el angulo real de montaje del sonar lateral respecto del frente del robot (90 = de costado).
+    # Con menos de 20 grados el nodo se niega a arrancar (perimeter_misconfigured). PROVISORIO: medirlo.
+    side_sonar_angle_deg: 45.0
+    use_side_sonar: true           # false: solo contacto con el bumper lateral (respaldo; puede trabarse)
+    max_range: 1.5
+    lost_distance: 0.9
+    obstacle_distance: 0.45        # sonar central: esquina interior
+    contact_turn: 0.5
+    contact_back_speed: 0.1
+    contact_back_time_s: 0.8
+    contact_away_time_s: 1.2
+    contact_away_linear: 0.08
+    seek_turn: 0.15
+    corner_turn_speed: 0.6
+    corner_clear_ratio: 1.3
+    corner_timeout_s: 8.0
+    lost_timeout_s: 0.6
+    bump_lost_timeout_s: 3.0
+    sonar_forward_offset: 0.19
+    outer_corner_extra: 0.10
+    contact_timeout_s: 6.0         # contacto continuo con el bumper lateral = bloqueado (perimeter_blocked)
+    search_arc_time_s: 4.0         # busqueda al perder la pared: arco hacia ella y tramo recto
+    search_arc_linear: 0.1
+    search_arc_turn: 0.4
+    search_forward_time_s: 3.0
+    search_timeout_s: 25.0         # tiempo total antes de rendirse (perimeter_lost)

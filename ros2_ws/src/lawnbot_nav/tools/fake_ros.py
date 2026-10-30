@@ -113,8 +113,12 @@ class MarkerArray:
 
 
 class Range:
+    ULTRASOUND = 0
+
     def __init__(self, range_m=1.5):
+        self.header = Header()
         self.range = range_m
+        self.radiation_type, self.field_of_view, self.min_range, self.max_range = 0, 0.0, 0.0, 0.0
 
 
 class Transform:

@@ -1,0 +1,22 @@
+random_walk:
+  ros__parameters:
+    rate_hz: 20.0
+    seed: -1                       # -1: al azar; un entero fija la secuencia (pruebas reproducibles)
+    sensor_timeout: 1.0            # s sin datos de un sensor requerido = no se mueve
+    sonar_left_enabled: true
+    sonar_center_enabled: true
+    sonar_right_enabled: true
+
+    linear: 0.2                    # m/s
+    backup_speed: 0.15             # m/s
+    backup_distance: 0.35          # m
+    turn_speed: 0.6                # rad/s
+    turn_min_deg: 60.0             # giro al azar entre estos angulos tras un obstaculo o bumper
+    turn_max_deg: 180.0
+    edge_turn_min_deg: 120.0       # tras el borde del cerco se gira mas para alejarse
+    edge_turn_max_deg: 180.0
+    obstacle_distance: 0.50        # m (sonar minimo) que dispara el retroceso
+    edge_distance: 1.5             # m al borde del cerco que dispara el retroceso (mayor que el error del GPS)
+    require_geofence: true         # sin /geofence/status OK y distancia vigente no se mueve (alerta geofence_not_ready)
+    stuck_triggers: 6              # tantos disparos en stuck_window_s = atrapado (alerta random_blocked)
+    stuck_window_s: 30.0
