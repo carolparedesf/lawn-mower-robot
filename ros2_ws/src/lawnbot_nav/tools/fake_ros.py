@@ -377,6 +377,7 @@ def install():
     _module('rclpy', init=lambda *a, **k: None, spin=lambda n: None, try_shutdown=lambda: None,
             ok=lambda: True)
     _module('rclpy.node', Node=NodeBase)
+    _module('rclpy.executors', ExternalShutdownException=type('ExternalShutdownException', (Exception,), {}))
     _module('rclpy.qos', DurabilityPolicy=Msg(TRANSIENT_LOCAL=1), HistoryPolicy=Msg(KEEP_LAST=1),
             QoSProfile=lambda **k: None, ReliabilityPolicy=Msg(RELIABLE=1),
             qos_profile_sensor_data=None)
