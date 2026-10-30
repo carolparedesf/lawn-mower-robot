@@ -35,6 +35,7 @@ setup(
             'coverage_map = lawnbot_nav.coverage_map:main',
             'vision_stub = lawnbot_nav.vision_stub:main',
             'robot_events = lawnbot_nav.robot_events:main',
+            'potential_field = lawnbot_nav.potential_field:main',
         ],
     },
 )

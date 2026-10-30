@@ -64,6 +64,9 @@ def generate_launch_description():
         Node(package='lawnbot_nav', executable='blade_controller', name='blade_controller',
              output='screen', parameters=[cfg('blade_controller.yaml'), use_sim_time]),
 
+        Node(package='lawnbot_nav', executable='potential_field', name='potential_field',
+             output='screen', parameters=[cfg('potential_field.yaml'), use_sim_time]),
+
         Node(package='lawnbot_nav', executable='robot_events', name='robot_events',
              output='screen', parameters=[cfg('robot_events.yaml'), use_sim_time]),
 

@@ -258,6 +258,7 @@ class NodeBase:
     def __init__(self, name):
         self.name = name
         self._params, self.pubs, self.subs, self.timers, self.clients = {}, {}, {}, [], {}
+        self.services = {}
         self._logger, self._clock = Logger(), Clock()
 
     def declare_parameter(self, name, default=None, *a):
@@ -277,6 +278,9 @@ class NodeBase:
 
     def create_timer(self, period, cb):
         self.timers.append((period, cb))
+
+    def create_service(self, typ, name, cb):
+        self.services[name] = cb
 
     def create_client(self, typ, name):
         client = Client()
@@ -332,6 +336,16 @@ def drop_pose(frame, child):
     TF['poses'].pop((frame, child), None)
 
 
+class SetBool:
+    class Request:
+        def __init__(self, data=False):
+            self.data = data
+
+    class Response:
+        def __init__(self):
+            self.success, self.message = False, ''
+
+
 # ── servicio fromLL falso ────────────────────────────────────
 class _Req:
     def __init__(self):
@@ -373,6 +387,8 @@ def install():
     _module('std_msgs.msg', Bool=Bool, String=String, Float32=Float32, Int32=Int32)
     _module('tf2_ros', Buffer=Buffer, TransformException=TransformException,
             TransformListener=lambda b, n: None, TransformBroadcaster=Broadcaster)
+    _module('std_srvs')
+    _module('std_srvs.srv', SetBool=SetBool)
     _module('robot_localization')
     _module('robot_localization.srv', FromLL=FromLL)
     _time.monotonic = lambda: MONO['t']
