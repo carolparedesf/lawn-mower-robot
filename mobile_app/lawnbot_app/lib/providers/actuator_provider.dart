@@ -15,11 +15,13 @@ class ActuatorProvider extends ChangeNotifier {
     bool? blade,
     bool? trimmer,
     bool? charging,
+    bool? forceCut,
   }) {
     final command = ActuatorCommand(
       blade: blade ?? current.blade,
       trimmer: trimmer ?? current.trimmer,
       charging: charging ?? current.charging,
+      forceCut: forceCut ?? current.forceCut,
     );
     MqttService.instance.publish(
       MqttConfig.topicCmdActuator,

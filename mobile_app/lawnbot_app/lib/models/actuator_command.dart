@@ -6,15 +6,21 @@ class ActuatorCommand {
   final bool trimmer;
   final bool charging;
 
+  /// Optional `force_cut`: overrides only the blade's grass condition. Sent
+  /// only when true; a missing key means false for the robot.
+  final bool forceCut;
+
   const ActuatorCommand({
     required this.blade,
     required this.trimmer,
     required this.charging,
+    this.forceCut = false,
   });
 
   Map<String, dynamic> toJson() => {
         'blade': blade,
         'trimmer': trimmer,
         'charging': charging,
+        if (forceCut) 'force_cut': true,
       };
 }
