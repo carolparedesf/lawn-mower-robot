@@ -34,6 +34,7 @@ setup(
             'blade_controller = lawnbot_nav.blade_controller:main',
             'coverage_map = lawnbot_nav.coverage_map:main',
             'vision_stub = lawnbot_nav.vision_stub:main',
+            'robot_events = lawnbot_nav.robot_events:main',
         ],
     },
 )

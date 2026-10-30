@@ -1108,6 +1108,18 @@ def run_bridge_actuators():
     check(b.mqtt.published[-1] == ('robot/map', '{"x": 1}', 0, True), 'robot/map: el mapa de cobertura se reenvia retenido')
     b.relay.clear()
 
+    # ── /robot/events -> robot/status.alert ──
+    last_alert = lambda: json.loads([m for m in b.mqtt.published if m[0] == 'robot/status'][-1][1])['alert']   # noqa: E731
+    b.subs['robot/events'](R.String('low_battery'))
+    check(last_alert() == 'low_battery', 'robot/events: el evento llega a la app como alert')
+    b.subs['nav/safety_alert'](R.String('geofence_breach'))
+    status_tick()
+    check(last_alert() == 'geofence_breach', '   la alerta de seguridad manda sobre el evento')
+    b.subs['nav/safety_alert'](R.String('none'))
+    R.advance(6.0)
+    status_tick()
+    check(last_alert() == 'none', '   y el evento vence a los 5 s')
+
     # ── vision_stub: grass_present true solo con el parametro explicito y con advertencia ──
     from lawnbot_nav.vision_stub import VisionStub
     v = make(VisionStub)
@@ -1124,6 +1136,66 @@ def run_bridge_actuators():
           '   y la repite cada 10 s mientras este activo')
     v2.shutdown_cleanup()
     check(v2.pubs['vision/grass_present'].last.data is False, 'shutdown: grass_present vuelve a false')
+
+
+def run_events():
+    print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
+    import yaml
+    from lawnbot_nav.robot_events import RobotEvents
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'robot_events.yaml')))['robot_events']['ros__parameters']
+    n = make(RobotEvents, **cfg)
+    tick = n.timer(0.1)
+    sent = lambda: [m.data for m in n.pubs['robot/events'].sent]   # noqa: E731
+    B = ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left', 'bumper/B4_right', 'bumper/B5_back')
+    S = {'mode': 'idle', 'cutter': 0.0, 'bat': 0.80, 'bumpers': set()}
+
+    def run(seconds):
+        for _ in range(int(seconds * 10)):
+            R.advance(0.1)
+            n.subs['nav/active_mode'](R.String(S['mode']))
+            n.subs['cutter/cmd'](R.Float32(S['cutter']))
+            n.subs['trimmer/cmd'](R.Float32(0.0))
+            for b in B:
+                n.subs[b](R.Bool(b in S['bumpers']))
+            bs = R.BatteryState()
+            bs.percentage, bs.voltage = S['bat'], 24.0
+            n.subs['battery/state'](bs)
+            tick()
+
+    run(1.0)
+    check(sent() == [], 'arranque en idle: sin eventos')
+    S['mode'] = 'auto_perimeter'
+    run(2.0)
+    check(sent() == ['perimeter_started'], 'auto_perimeter -> perimeter_started una vez')
+    S['mode'] = 'auto_parallel'
+    run(2.0)
+    check(sent()[-1] == 'navigation_started' and len(sent()) == 2, 'auto_parallel -> navigation_started')
+    S['cutter'] = 0.3
+    run(2.0)
+    check(sent()[-1] == 'cutting_started' and len(sent()) == 3, '/cutter/cmd > 0 -> cutting_started')
+    S['bumpers'] = {'bumper/B3_left', 'bumper/B4_right'}
+    run(1.0)
+    S['bumpers'] = set()
+    run(5.0)
+    check(sent().count('lifted') == 1, 'B3+B4 a la vez -> lifted una sola vez')
+    S['bat'] = 0.15
+    run(60.0)
+    check(sent().count('low_battery') == 1, 'bateria 15 %: low_battery una sola vez en 60 s')
+    S['bat'] = 0.22
+    run(5.0)
+    S['bat'] = 0.15
+    run(5.0)
+    check(sent().count('low_battery') == 1, '   dentro de la banda de histeresis no se repite')
+    S['bat'] = 0.30
+    run(2.0)
+    S['bat'] = 0.15
+    run(5.0)
+    check(sent().count('low_battery') == 2, '   rearma al pasar umbral + margen')
+    n_before = len(sent())
+    n.mode_time -= 10.0
+    S['mode'] = 'idle'
+    run(3.0)
+    check(len(sent()) == n_before, 'volver a idle no genera eventos')
 
 
 FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
@@ -1152,4 +1224,5 @@ if __name__ == '__main__':
     run_gate_perimeter()
     run_blade()
     run_bridge_actuators()
+    run_events()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

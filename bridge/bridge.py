@@ -11,6 +11,7 @@ ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
                         blade/trimmer/force_cut pedidos y blade_running/trimmer_running reales
   robot/position     <- gpsd (hilo propio, sin cambios)
+  robot/status.alert <- tambien /robot/events (lifted, low_battery...) por unos segundos si no hay alerta de seguridad
   robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
 
 La navegacion automatica ya no vive aqui: la resuelven mode_manager / twist_mux / safety_gate
@@ -33,6 +34,7 @@ import paho.mqtt.client as mqtt
 import gpsd
 
 from actuator_relay import ActuatorRelay
+from status_alert import pick_alert
 
 BROKER = "localhost"
 
@@ -69,6 +71,7 @@ class RobotBridge(Node):
         self.create_subscription(String, 'nav/safety_alert', self.on_safety_alert, LATCHED)
         self.create_subscription(BatteryState, 'battery/state', self.on_battery,
                                  qos_profile_sensor_data)
+        self.create_subscription(String, 'robot/events', self.on_robot_event, 10)
         self.create_subscription(String, 'coverage/map', self.on_coverage_map, 10)
         self.create_subscription(Float32, 'cutter/cmd', lambda m: self.on_motor_cmd('cutter', m), 10)
         self.create_subscription(Float32, 'trimmer/cmd', lambda m: self.on_motor_cmd('trimmer', m), 10)
@@ -78,6 +81,8 @@ class RobotBridge(Node):
         self.active_mode = None
         self.active_mode_time = 0.0
         self.alert = "none"
+        self.event = None
+        self.event_time = 0.0
         self.battery_pct = None
         self.battery_time = 0.0
         self.geofence_points = []
@@ -217,6 +222,10 @@ class RobotBridge(Node):
         if changed:
             self.publish_status()
 
+    def on_robot_event(self, msg):
+        self.event, self.event_time = msg.data, time.monotonic()
+        self.publish_status()
+
     def on_battery(self, msg):
         pct = msg.percentage * 100.0
         if msg.voltage > BATTERY_MIN_VALID_V and 0.0 <= pct <= 100.0:
@@ -239,7 +248,7 @@ class RobotBridge(Node):
         # Sin dato de bateria valido no se envia la clave (la app muestra 0)
         if self.battery_pct is not None and now - self.battery_time <= BATTERY_STALE_S:
             status["battery"] = int(round(self.battery_pct))
-        status["alert"] = self.alert
+        status["alert"] = pick_alert(self.alert, self.event, now - self.event_time)
         # Estado de los actuadores: "blade"/"trimmer" son lo pedido y aceptado (la app arma su proximo comando a partir
         # de ellos); "*_running" es si el motor esta corriendo de verdad (puede estar apagado por una condicion)
         blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())
