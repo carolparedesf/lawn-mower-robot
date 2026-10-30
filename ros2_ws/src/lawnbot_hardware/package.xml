@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lawnbot_hardware</name>
+  <version>0.1.0</version>
+  <description>Nodos de hardware de la Raspberry Pi: TF-Mini Plus y motores de corte (BTS7960).</description>
+  <maintainer email="carolparedesf@fiuna.edu.py">carolparedesf</maintainer>
+  <license>TODO: License declaration</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+  <!-- cutting_motors_node necesita el modulo Python `pigpio` y el servicio pigpiod activo -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
