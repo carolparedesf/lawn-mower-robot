@@ -1,0 +1,36 @@
+# Evasion por campo de potencial. Arranca APAGADO; activarlo (solo tiene efecto en auto_parallel y auto_random):
+#   ros2 service call /potential_field/set_enabled std_srvs/srv/SetBool "{data: true}"
+#   ros2 topic pub --once /potential_field/enable std_msgs/msg/Bool "{data: true}"
+potential_field:
+  ros__parameters:
+    rate_hz: 20.0
+    output_topic: cmd_vel_potential_field    # twist_mux, prioridad 60
+    enabled: false
+    use_vision: false                        # camara sin calibrar: solo sonares
+    vision_topic: vision/obstacles           # PoseArray en base_footprint
+    vision_timeout: 0.5
+    sensor_timeout: 1.0
+    nominal_timeout: 0.5
+    nominal_topics_parallel: ['cmd_vel_waypoint', 'cmd_vel_parallel']
+    nominal_topics_random: ['cmd_vel_random']
+    base_frame: base_footprint
+    progress_frame: odom
+    pose_timeout: 0.5
+    sonar_max_range: 1.5
+    sonar_min_range: 0.02
+    # Montaje [x, y, yaw en grados]. El yaw lateral (45) es PROVISORIO: el URDF los pone al frente.
+    sonar_left: [0.194, 0.136, 45.0]
+    sonar_center: [0.198, 0.0, 0.0]
+    sonar_right: [0.193, -0.1435, -45.0]
+
+    influence_distance: 0.60                 # m desde el borde del cuerpo (el gate frena a 0,30 y para a 0,15)
+    min_distance: 0.15
+    slow_gain: 1.0
+    turn_gain: 1.0
+    max_turn: 0.6                            # rad/s
+    tie_turn: 1.0                            # obstaculo justo de frente: +1 gira a la izquierda, -1 a la derecha
+    tie_band: 0.08
+    min_command: 0.02
+    stall_window_s: 6.0                      # minimo local: sin avanzar stall_min_progress en esta ventana
+    stall_min_progress: 0.20
+    yield_s: 4.0                             # cede el control (no publica) tras detectarlo

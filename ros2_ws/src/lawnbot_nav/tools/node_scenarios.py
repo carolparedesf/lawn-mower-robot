@@ -1138,6 +1138,210 @@ def run_bridge_actuators():
     check(v2.pubs['vision/grass_present'].last.data is False, 'shutdown: grass_present vuelve a false')
 
 
+def run_potential_field():
+    print('\n[11] potential_field + random_walk + mux + safety_gate con fake_robot (cuarto con obstaculos)')
+    import yaml
+    from lawnbot_nav.fake_robot import FakeRobot
+    from lawnbot_nav.geofence_logic import signed_distance
+    from lawnbot_nav.potential_field import PotentialField
+    from lawnbot_nav.random_walk import RandomWalk
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
+    room, rw_cfg, pf_cfg, gate_cfg = (load('sim_room.yaml', 'fake_robot'), load('random_walk.yaml', 'random_walk'),
+                                      load('potential_field.yaml', 'potential_field'), load('safety_gate.yaml', 'safety_gate'))
+    fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+    mux_cfg = yaml.safe_load(open(os.path.join(cfg_dir, 'twist_mux.yaml')))['twist_mux']['ros__parameters']['topics']
+    check(mux_cfg['potential_field']['priority'] == 60 and mux_cfg['waypoints']['priority'] == 50
+          and mux_cfg['manual']['priority'] > 60, 'twist_mux: potential_field en 60, sobre waypoints (50) y bajo manual')
+    check(pf_cfg['enabled'] is False and pf_cfg['use_vision'] is False, 'potential_field.yaml: apagado y sin vision por defecto')
+
+    robot_node = make(FakeRobot, **dict(room, x=3.0, y=2.0))
+    rw = make(RandomWalk, **dict(rw_cfg, seed=5, edge_distance=1.0))
+    pf = make(PotentialField, **pf_cfg)
+    gate = make(SafetyGate, **gate_cfg)
+    check(not pf.enabled, 'arranca apagado')
+    fake_tick, sensors_tick = robot_node.timer(0.02), robot_node.timer(0.2)
+    rw_tick, pf_tick, gate_tick = rw.timer(0.05), pf.timer(0.05), gate.timer(0.05)
+    robot_cmd = robot_node.subs['cmd_vel']
+    st = {'mode': None, 'last_mode': -1, 'sent': {}, 'next_sensor': 0.0, 'next_ctrl': R.MONO['t'], 'bumper_presses': 0,
+          'min_gap': 99.0, 'pf_out': [], 'nominal': [], 'freeze': False, 'force_nominal': None}
+    xy = []
+
+    def set_mode(name):
+        st['mode'], st['last_mode'] = name, int(R.MONO['t'])
+        for n in (rw, pf, gate):
+            n.subs['nav/active_mode'](R.String(name))
+
+    def new_msgs(pub, key):
+        out = pub.sent[st['sent'].get(key, 0):]
+        st['sent'][key] = len(pub.sent)
+        return out
+
+    def deliver_sensors():
+        for name, pub in robot_node.sonar_pubs.items():
+            for m in new_msgs(pub, f'sonar/{name}'):
+                for n in (rw, pf, gate):
+                    if f'sonar/{name}' in n.subs:
+                        n.subs[f'sonar/{name}'](m)
+        for name, pub in robot_node.bumper_pubs.items():
+            for m in new_msgs(pub, name):
+                st['bumper_presses'] += bool(m.data)
+                for n in (rw, gate):
+                    if name in n.subs:
+                        n.subs[name](m)
+
+    def step(dt=0.02):
+        R.advance(dt)
+        t = R.MONO['t']
+        if st['mode'] and int(t) != st['last_mode']:
+            set_mode(st['mode'])
+        fake_tick()
+        r = robot_node.robot
+        R.set_pose('odom', 'base_footprint', r.x, r.y, r.yaw)
+        if t >= st['next_sensor']:
+            sensors_tick()
+            deliver_sensors()
+            rw.subs['geofence/status'](R.String('OK'))
+            rw.subs['geofence/distance_to_edge'](R.Float32(signed_distance((r.x, r.y), fence)))
+            st['next_sensor'] = t + 0.2
+        if t >= st['next_ctrl']:
+            st['next_ctrl'] += 0.05
+            if st['force_nominal'] is None:
+                rw_tick()
+                nominal = new_msgs(rw.pubs['cmd_vel_random'], 'rw')
+                nominal_topic = 'cmd_vel_random'
+            else:
+                nominal = [_twist(*st['force_nominal'])]
+                nominal_topic = 'cmd_vel_waypoint'
+            for m in nominal:
+                pf.subs[nominal_topic](m)
+                st['nominal'].append((t, m.linear.x, m.angular.z))
+            pf_tick()
+            from_pf = new_msgs(pf.pubs['cmd_vel_potential_field'], 'pf')
+            for m in from_pf:
+                st['pf_out'].append((t, m.linear.x, m.angular.z))
+            # twist_mux: el de mayor prioridad que no haya vencido; potential_field (60) gana a random (10) y waypoints (50)
+            chosen = from_pf if from_pf else nominal
+            for m in chosen:
+                gate.subs['cmd_vel_mux'](m)
+            pub = gate.pubs['cmd_vel']
+            n0 = len(pub.sent)
+            gate_tick()
+            if not st['freeze']:
+                for m in pub.sent[n0:]:
+                    robot_cmd(m)
+        xy.append((r.x, r.y))
+        st['min_gap'] = min(st['min_gap'], robot_node.world.distance((r.x, r.y)))
+
+    def run(seconds):
+        for _ in range(int(seconds / 0.02)):
+            step()
+
+    count = lambda node, topic: len(node.pubs[topic].sent)   # noqa: E731
+
+    # apagado: aunque el modo sea auto_random no publica
+    set_mode('auto_random')
+    run(20.0)
+    check(count(pf, 'cmd_vel_potential_field') == 0, 'apagado (por defecto): no publica nada en auto_random')
+
+    # activar por servicio; solo actua en auto_parallel / auto_random
+    resp = pf.services['potential_field/set_enabled'](R.SetBool.Request(True), R.SetBool.Response())
+    check(resp.success and pf.enabled, 'el servicio set_enabled lo activa')
+    set_mode('auto_perimeter')
+    run(3.0)
+    set_mode('manual')
+    run(3.0)
+    set_mode('idle')
+    run(3.0)
+    check(count(pf, 'cmd_vel_potential_field') == 0, 'activado pero en auto_perimeter / manual / idle: no publica')
+
+    # navegacion con evasion en auto_random
+    set_mode('auto_random')
+    start_bumpers = st['bumper_presses']
+    st['min_gap'] = 99.0
+    st['pf_out'].clear()
+    st['nominal'].clear()
+    xy.clear()
+    run(240.0)
+    n_pf = len(st['pf_out'])
+    check(n_pf > 4000, f'activado en auto_random publica a ~20 Hz: {n_pf} ordenes en 240 s')
+    check(max(v for _, v, _ in st['pf_out']) <= max(v for _, v, _ in st['nominal']) + 1e-9,
+          'nunca supera la velocidad lineal del algoritmo')
+    check(max(abs(w) for _, _, w in st['pf_out']) <= max(0.6, max(abs(w) for _, _, w in st['nominal'])) + 1e-9, 'el giro agregado queda acotado')
+    cells = {(int(x), int(y)) for x, y in xy}
+    check(len(cells) >= 10, f'sigue recorriendo el cuarto: {len(cells)} celdas de 1 m')
+    check(st['bumper_presses'] == start_bumpers, 'ningun bumper presionado')
+    check(st['min_gap'] > 0.03, f'nunca toca una pared u obstaculo (distancia minima {st["min_gap"]:.2f} m)')
+    check(any(v < 0.999 * n for (_, v, _), (_, n, _) in zip(st['pf_out'], st['nominal']) if n > 0), 'frena cuando hay obstaculo cerca')
+    check(max(abs(m.linear.x) for m in gate.pubs['cmd_vel'].sent) <= 0.5 + 1e-9, 'todo paso por el safety_gate')
+
+    # fuera de modo y desactivado: ceros y silencio
+    set_mode('idle')
+    run(1.0)
+    check(all(m.linear.x == 0 and m.angular.z == 0 for m in pf.pubs['cmd_vel_potential_field'].sent[-3:]),
+          'al salir del modo publica ceros')
+    n = count(pf, 'cmd_vel_potential_field')
+    run(2.0)
+    check(count(pf, 'cmd_vel_potential_field') == n, '   y despues calla')
+    pf.subs['potential_field/enable'](R.Bool(False))
+    check(not pf.enabled, 'el topic /potential_field/enable lo apaga')
+
+    # minimo local: robot trabado (las ordenes no llegan a las ruedas) frente a una pared con orden de avanzar
+    pf.subs['potential_field/enable'](R.Bool(True))
+    robot_node.robot.x, robot_node.robot.y, robot_node.robot.yaw, robot_node.robot.v, robot_node.robot.w = 9.5, 4.0, 0.0, 0.0, 0.0
+    set_mode('auto_parallel')
+    st['force_nominal'] = (0.2, 0.0)
+    st['freeze'] = True
+    pf.core.reset()
+    alerts_before = len(pf.pubs['nav/alert_in'].sent)
+    st['pf_out'].clear()
+    waited = 0.0
+    while pf.core.alert is None and waited < 15.0:
+        run(0.1)
+        waited += 0.1
+    new_alerts = [m.data for m in pf.pubs['nav/alert_in'].sent[alerts_before:]]
+    check('potential_field:local_minimum' in new_alerts, 'sin progreso frente a un obstaculo: avisa local_minimum por /nav/alert_in')
+    n_out = len(st['pf_out'])
+    run(2.0)
+    check(len(st['pf_out']) == n_out, '   y cede el control: no publica mientras dura yield_s')
+    run(6.0)
+    check(len(st['pf_out']) > n_out, '   y retoma despues')
+    from lawnbot_nav.safety_logic import merge_alerts
+    check(merge_alerts('none', {'pf': ('local_minimum', 0.1)}) == 'local_minimum', 'el gate reconoce la alerta local_minimum')
+
+    # vision: apagada por defecto, y con use_vision los obstaculos de /vision/obstacles tambien frenan
+    check('vision/obstacles' not in pf.subs, 'use_vision=false: no escucha /vision/obstacles')
+    pv = make(PotentialField, **dict(pf_cfg, use_vision=True, enabled=True))
+    pv.subs['nav/active_mode'](R.String('auto_random'))
+    for s_ in ('left', 'center', 'right'):
+        pv.subs[f'sonar/{s_}'](R.Range(1.5))
+    pv.subs['cmd_vel_random'](_twist(0.3, 0.0))
+    arr = R.PoseArray()
+    obstacle = R.Pose()
+    obstacle.position.x, obstacle.position.y = 0.45, 0.0
+    arr.poses = [obstacle]
+    arr.header.frame_id = 'base_footprint'
+    pv.subs['vision/obstacles'](arr)
+    R.advance(0.05)
+    pv.timer(0.05)()
+    check(pv.pubs['cmd_vel_potential_field'].last.linear.x < 0.3, 'use_vision=true: un obstaculo de camara al frente reduce la velocidad')
+    arr.header.frame_id = 'camera_link'
+    pv.subs['vision/obstacles'](arr)
+    check(pv.get_logger().has('se ignora', 'WARN'), 'frame distinto de base_footprint: se ignora')
+
+    # sin sonares vigentes no publica; shutdown publica cero
+    pf.subs['potential_field/enable'](R.Bool(True))
+    set_mode('auto_random')
+    pf.cache._data.clear()
+    n = count(pf, 'cmd_vel_potential_field')
+    R.advance(0.1)
+    pf_tick()
+    check(count(pf, 'cmd_vel_potential_field') == n, 'sin sonares vigentes: no publica (el gate frena al algoritmo)')
+    pf.shutdown_cleanup()
+    check(all(m.linear.x == 0 and m.angular.z == 0 for m in pf.pubs['cmd_vel_potential_field'].sent[-5:]), 'shutdown: publica cero')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1225,4 +1429,5 @@ if __name__ == '__main__':
     run_blade()
     run_bridge_actuators()
     run_events()
+    run_potential_field()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

@@ -465,6 +465,27 @@ espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obsta
    Simular cada condición: `/estop` `true`, `/geofence/inside` fuera del cerco, dos bumpers `true` a la vez (B3 y B4), un `Imu` inclinado, o cortar un publicador (dato viejo).
    Ver el mapa por MQTT: `mosquitto_sub -t robot/map -C 1`.
 
+## Bloque D: evasión por campo de potencial (`potential_field`)
+
+Nodo `potential_field` (`config/potential_field.yaml`, arranca con `nav.launch.py`) que **corrige la orden del algoritmo activo** con la repulsión de los obstáculos cercanos. No planifica rutas.
+
+- **Apagado por defecto.** Se activa por servicio o por topic (solo tiene efecto en `auto_parallel` y `auto_random`; en `auto_perimeter`, `manual`, `idle` y `stop` no publica):
+  ```bash
+  ros2 service call /potential_field/set_enabled std_srvs/srv/SetBool "{data: true}"
+  ros2 topic pub --once /potential_field/enable std_msgs/msg/Bool "{data: true}"
+  ros2 topic echo /potential_field/status      # off | waiting_mode | on | avoiding | yield
+  ```
+- **Cadena:** lee la orden del algoritmo (`/cmd_vel_waypoint` y `/cmd_vel_parallel` en parallel, `/cmd_vel_random` en random), publica `/cmd_vel_potential_field` a 20 Hz, que entra a `twist_mux` con **prioridad 60** (sobre waypoints 50, bajo manual 100) y de ahí al `safety_gate`. Nunca publica en `/cmd_vel`.
+  Si el nodo se cae, el mux vuelve solo al algoritmo a los 0,5 s. Al desactivarse, salir del modo o apagarse publica ceros.
+- **Reglas:** nunca crea movimiento (orden nominal 0 → 0), nunca supera la velocidad lineal nominal, no retrocede por su cuenta, y el giro agregado se limita a `max_turn` (0,6 rad/s). Obstáculo justo de frente: desempata girando hacia `tie_turn`.
+  Sin lecturas vigentes de los tres sonares no publica (el gate frena al algoritmo por sensor viejo).
+- **Entradas:** los tres sonares (montaje `sonar_*` en el YAML; **el yaw lateral de 45° es provisorio**, igual que en `perimeter` y `fake_robot`) y, **solo con `use_vision: true`**, `/vision/obstacles` (`PoseArray` en `base_footprint`; en otro frame se ignora con aviso).
+  `vision_stub` ya publica ese topic vacío, así que el contrato existe aunque no haya cámara. Lecturas sin eco (>= `sonar_max_range` − 0,05) no son obstáculo.
+- **Mínimo local:** con obstáculos dentro de `influence_distance` y orden de avanzar, si el robot no se mueve `stall_min_progress` (0,20 m) en `stall_window_s` (6 s) avisa **`potential_field:local_minimum`** por `/nav/alert_in`
+  (llega a la app en `alert`) y **cede el control** `yield_s` (4 s) para que el algoritmo de abajo (p. ej. el retroceso de `random_walk`) resuelva. El progreso se mide con la TF `odom` -> `base_footprint`; sin ella no se detecta y se avisa en el log.
+- Pruebas sin ROS: `PYTHONPATH=. python3 test/test_potential_field.py` y el escenario [11] de `tools/node_scenarios.py` (random_walk + potential_field + mux + gate con `fake_robot` y obstáculos; robot trabado para el mínimo local).
+  Con ROS: `ros2 launch lawnbot_nav sim_world.launch.py`, activar el nodo y pedir `auto_random`.
+
 ## Eventos del robot (`robot_events`)
 
 El nodo `robot_events` (`config/robot_events.yaml`, arranca con `nav.launch.py`) publica en **`/robot/events`** (`std_msgs/String`, QoS reliable, volátil) el **nombre del evento**, una sola vez por cambio (flanco):
