@@ -431,6 +431,7 @@ Payload **real** de la app (`robot/cmd/actuator`, QoS 1, uno por cada cambio; la
   En manual `blade_controller` sigue aplicando todo: cerco, levantado, volcado, estop, datos vigentes y pasto (que solo `force_cut` anula).
 - **`robot/status`** (contrato intacto, claves nuevas): `blade` y `trimmer` = lo pedido y aceptado (la app arma su próximo comando a partir de ellos, así que tienen que estar), `force_cut`,
   y `blade_running` / `trimmer_running` = el motor corre de verdad (`/cutter/cmd` o `/trimmer/cmd` > 0 y vigente; puede estar en `false` con el pedido en `true` si una condición lo apaga).
+  `blade_status` (clave nueva, opcional): el texto de `/blade/status` (p. ej. `cutter=OFF(sin_pasto) | trimmer=ON duty=0.30`) para que la app diga **por qué** un motor pedido no corre; se omite si tiene más de 3 s.
 
 ### coverage_map (`config/coverage_map.yaml`)
 
@@ -440,7 +441,11 @@ espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obsta
   de la celda (con histéresis, así el vaivén en el borde no suma). `/coverage/cell_passes` informa las completadas **sin** contar la visita en curso, y `-1` si se desconoce.
 - **`robot/map` (MQTT):** el bridge reenvía `/coverage/map` (cada 2 s, QoS 0, retenido). JSON: `frame`, `resolution`, `origin [x0, y0]`, `width`, `height`, `encoding`
   (`base64-u8-row-major`), `passes` (0–255), `obstacles_sonar` y `obstacles_camera` (certeza 0–100), `robot [x, y, yaw]` y `stamp`. Cada capa son `width × height` bytes en base64,
-  fila por fila desde el origen. Para un cerco de 42 × 32 m a 0,5 m son ~25 KB por mensaje. Los topics existentes de MQTT no cambian.
+  fila por fila desde el origen.
+  **`origin_ll`** `[lat, lng]` (clave nueva, opcional): lat/lng del origen (0, 0) del frame `map`, con x = este e y = norte, para que la app ubique la grilla. Sale del servicio **`/toLL`** de `navsat_transform`
+  (`robot_localization/srv/ToLL`, pide `map_point`, responde `ll_point`; existe en Humble, verificado en el código fuente de `navsat_transform.cpp`, no en la Pi). Si todavía no hay transformación responde (0, 0): se descarta y se reintenta.
+  Se reconsulta cada `origin_refresh_s` (10 s) y, si cambia más de `origin_change_deg` (1e-6°, ~0,1 m; p. ej. otro datum), el mapa se reenvía de inmediato. Sin dato la clave se omite.
+  Parámetro `origin_source`: `navsat` (por defecto), `param` (`origin_lat`/`origin_lng` fijos, para pruebas) o `none`. **Hay que comprobar en la Pi** `ros2 service list | grep -i ll` y `ros2 service call /toLL robot_localization/srv/ToLL "{map_point: {x: 0.0, y: 0.0, z: 0.0}}"`. Para un cerco de 42 × 32 m a 0,5 m son ~25 KB por mensaje. Los topics existentes de MQTT no cambian.
 
 - **Nota sobre el error de GPS:** con 2–3 m de error, una celda de 0,5 m no es "exactamente la celda" por donde pasó el robot: el conteo de pasadas es confiable como **tendencia**
   (zonas cortadas de más o de menos), no al centímetro, y la posición del propio robot en el mapa tiene ese mismo error. Una celda menor de 0,5 m no mejora nada y el nodo lo advierte en el log;

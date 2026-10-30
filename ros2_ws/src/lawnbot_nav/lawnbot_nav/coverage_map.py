@@ -5,6 +5,10 @@ Publica /coverage/cell_passes (Int32: pasadas completadas de la celda donde esta
 lo lee blade_controller) y /coverage/map (String con JSON, ver CoverageGrid.to_dict) para que el bridge lo
 mande por MQTT a robot/map. Una pasada cuenta solo si la cuchilla estaba cortando (/cutter/cmd > 0), salvo
 `count_only_when_cutting: false`. No mueve el robot.
+
+El JSON lleva ademas `origin_ll` [lat, lng]: la latitud/longitud del origen (0, 0) del frame `map`, para que la app ubique la
+grilla en el mapa (x = este, y = norte). Sale del servicio /toLL de navsat_transform y se vuelve a consultar cada
+`origin_refresh_s`; si cambia (otro datum) se actualiza y el mapa se reenvia de inmediato. Sin dato la clave se omite.
 """
 import json
 import math
@@ -49,6 +53,12 @@ class CoverageMap(Node):
         d('base_frame', 'base_footprint')
         d('pose_timeout', 0.5)
         d('hysteresis', 0.15)
+        d('origin_source', 'navsat')           # navsat: servicio toLL | param: origin_lat/origin_lng | none: sin origin_ll
+        d('to_ll_service', 'toLL')
+        d('origin_lat', 0.0)
+        d('origin_lng', 0.0)
+        d('origin_refresh_s', 10.0)
+        d('origin_change_deg', 1.0e-6)         # ~0,1 m: un cambio menor es ruido numerico
 
         gp = self.get_parameter
         self.res = gp('resolution').value
@@ -66,6 +76,23 @@ class CoverageMap(Node):
         self.pose_timeout = gp('pose_timeout').value
         self.hysteresis = gp('hysteresis').value
         self.publish_period = gp('publish_period_s').value
+        self.origin_source = gp('origin_source').value
+        if self.origin_source not in ('navsat', 'param', 'none'):
+            raise ValueError("origin_source debe ser 'navsat', 'param' o 'none'")
+        self.origin_refresh = gp('origin_refresh_s').value
+        self.origin_tol = gp('origin_change_deg').value
+        self.origin_ll = None
+        self.origin_pending = False
+        self.last_origin_query = -math.inf
+        self.origin_client = None
+        if self.origin_source == 'param':
+            if (gp('origin_lat').value, gp('origin_lng').value) == (0.0, 0.0):
+                raise ValueError('origin_source param requiere origin_lat y origin_lng')
+            self.origin_ll = (gp('origin_lat').value, gp('origin_lng').value)
+        elif self.origin_source == 'navsat':
+            from robot_localization.srv import ToLL
+            self.ToLL = ToLL
+            self.origin_client = self.create_client(ToLL, gp('to_ll_service').value)
 
         self.grid = None
         self.polygon = None
@@ -123,6 +150,38 @@ class CoverageMap(Node):
         self.grid.add_camera((pose.x + c * p.position.x - s * p.position.y,
                               pose.y + s * p.position.x + c * p.position.y) for p in msg.poses)
 
+    # ── Origen en lat/lng ────────────────────────────────────
+
+    def maintain_origin(self, now):
+        """Pregunta a navsat_transform por el lat/lng del origen del frame map, cada origin_refresh_s."""
+        if self.origin_client is None or self.origin_pending or now - self.last_origin_query < self.origin_refresh:
+            return
+        if not self.origin_client.service_is_ready():
+            return
+        self.last_origin_query = now
+        self.origin_pending = True
+        req = self.ToLL.Request()
+        req.map_point.x = req.map_point.y = req.map_point.z = 0.0
+        self.origin_client.call_async(req).add_done_callback(self.on_origin)
+
+    def on_origin(self, future):
+        self.origin_pending = False
+        try:
+            ll = future.result().ll_point
+            lat, lng = float(ll.latitude), float(ll.longitude)
+        except Exception:
+            return
+        # navsat_transform responde (0, 0) sin error si su transformacion aun no esta lista
+        if (lat, lng) == (0.0, 0.0) or math.isnan(lat) or math.isnan(lng):
+            self.get_logger().warn('toLL sin transformacion lista; se reintenta', throttle_duration_sec=30.0)
+            self.last_origin_query = -math.inf if self.origin_ll is None else self.last_origin_query
+            return
+        old = self.origin_ll
+        if old is None or abs(lat - old[0]) > self.origin_tol or abs(lng - old[1]) > self.origin_tol:
+            self.origin_ll = (lat, lng)
+            self.last_map_pub = -math.inf                 # reenviar el mapa ya con el origen nuevo
+            self.get_logger().info(f'origen del mapa: {lat:.7f}, {lng:.7f}' + ('' if old is None else ' (cambio de datum)'))
+
     # ── Ciclo ────────────────────────────────────────────────
 
     def cutting(self, now):
@@ -140,11 +199,15 @@ class CoverageMap(Node):
             result = self.grid.update_pose(pose.x, pose.y, self.cutting(now))
             passes = -1 if result is None else int(result)
         self.passes_pub.publish(Int32(data=passes))
+        self.maintain_origin(now)
 
         if self.grid is not None and now - self.last_map_pub >= self.publish_period:
             self.last_map_pub = now
             robot = (pose.x, pose.y, pose.yaw) if pose is not None else None
-            self.map_pub.publish(String(data=json.dumps(self.grid.to_dict(robot, stamp=time.time()))))
+            payload = self.grid.to_dict(robot, stamp=time.time())
+            if self.origin_ll is not None:
+                payload['origin_ll'] = [self.origin_ll[0], self.origin_ll[1]]
+            self.map_pub.publish(String(data=json.dumps(payload)))
 
     def shutdown_cleanup(self):
         self.passes_pub.publish(Int32(data=-1))          # sin nodo no hay dato: el cortador se apaga

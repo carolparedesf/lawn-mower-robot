@@ -17,3 +17,11 @@ coverage_map:
     frame_id: map
     base_frame: base_footprint
     pose_timeout: 0.5
+    # Lat/lng del origen del frame map (para que la app ubique la grilla): navsat = servicio toLL de navsat_transform,
+    # param = origin_lat/origin_lng fijos (pruebas), none = sin origin_ll. Se reconsulta cada origin_refresh_s.
+    origin_source: navsat
+    to_ll_service: toLL
+    origin_lat: 0.0
+    origin_lng: 0.0
+    origin_refresh_s: 10.0
+    origin_change_deg: 1.0e-6

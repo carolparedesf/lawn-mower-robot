@@ -9,7 +9,8 @@ MQTT -> ROS:
                         payload {"blade","trimmer","charging"} + "force_cut" opcional; ver actuator_relay.py)
 ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
-                        blade/trimmer/force_cut pedidos y blade_running/trimmer_running reales
+                        blade/trimmer/force_cut pedidos, blade_running/trimmer_running reales y blade_status (texto de
+                        /blade/status: por que la cuchilla corre o no; se omite si esta viejo)
   robot/position     <- gpsd (hilo propio, sin cambios)
   robot/status.alert <- tambien /robot/events (lifted, low_battery...) por unos segundos si no hay alerta de seguridad
   robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
@@ -44,6 +45,7 @@ ACTIVE_MODE_STALE_S = 3.0   # sin /nav/active_mode reciente se informa 'idle'
 BATTERY_STALE_S = 5.0
 BATTERY_MIN_VALID_V = 1.0   # el firmware publica 0 V si el INA228 no esta conectado
 ENABLE_PERIOD_S = 0.25      # los pedidos de encendido se republican a 4 Hz; blade_controller los vence a los 2 s
+BLADE_STATUS_STALE_S = 3.0  # /blade/status se publica a >= 1 Hz
 MOTOR_CMD_STALE_S = 1.0     # /cutter/cmd viejo = el motor no esta corriendo
 
 LATCHED = QoSProfile(
@@ -71,6 +73,7 @@ class RobotBridge(Node):
         self.create_subscription(String, 'nav/safety_alert', self.on_safety_alert, LATCHED)
         self.create_subscription(BatteryState, 'battery/state', self.on_battery,
                                  qos_profile_sensor_data)
+        self.create_subscription(String, 'blade/status', self.on_blade_status, 10)
         self.create_subscription(String, 'robot/events', self.on_robot_event, 10)
         self.create_subscription(String, 'coverage/map', self.on_coverage_map, 10)
         self.create_subscription(Float32, 'cutter/cmd', lambda m: self.on_motor_cmd('cutter', m), 10)
@@ -82,6 +85,8 @@ class RobotBridge(Node):
         self.active_mode_time = 0.0
         self.alert = "none"
         self.event = None
+        self.blade_status = None
+        self.blade_status_time = 0.0
         self.event_time = 0.0
         self.battery_pct = None
         self.battery_time = 0.0
@@ -222,6 +227,9 @@ class RobotBridge(Node):
         if changed:
             self.publish_status()
 
+    def on_blade_status(self, msg):
+        self.blade_status, self.blade_status_time = msg.data, time.monotonic()
+
     def on_robot_event(self, msg):
         self.event, self.event_time = msg.data, time.monotonic()
         self.publish_status()
@@ -257,6 +265,8 @@ class RobotBridge(Node):
         status["force_cut"] = force_cut
         status["blade_running"] = self.motor_running("cutter")
         status["trimmer_running"] = self.motor_running("trimmer")
+        if self.blade_status is not None and now - self.blade_status_time <= BLADE_STATUS_STALE_S:
+            status["blade_status"] = self.blade_status
         self.mqtt.publish("robot/status", json.dumps(status), qos=1)
 
     # ── GPS ───────────────────────────────────────────────────

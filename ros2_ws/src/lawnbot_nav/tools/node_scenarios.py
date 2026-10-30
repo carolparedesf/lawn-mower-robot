@@ -1141,6 +1141,17 @@ def run_bridge_actuators():
     status_tick()
     check(last_alert() == 'none', '   y el evento vence a los 5 s')
 
+    # ── /blade/status -> robot/status.blade_status ──
+    status_tick()
+    check('blade_status' not in json.loads([m for m in b.mqtt.published if m[0] == 'robot/status'][-1][1]), 'sin /blade/status: la clave blade_status se omite')
+    b.subs['blade/status'](R.String('cutter: sin_pasto | trimmer: apagado'))
+    status_tick()
+    check(json.loads([m for m in b.mqtt.published if m[0] == 'robot/status'][-1][1])['blade_status'] == 'cutter: sin_pasto | trimmer: apagado',
+          '/blade/status se reenvia como blade_status en robot/status')
+    R.advance(4.0)
+    status_tick()
+    check('blade_status' not in json.loads([m for m in b.mqtt.published if m[0] == 'robot/status'][-1][1]), '   y se omite si esta viejo (> 3 s)')
+
     # ── vision_stub: grass_present true solo con el parametro explicito y con advertencia ──
     from lawnbot_nav.vision_stub import VisionStub
     v = make(VisionStub)
@@ -1439,6 +1450,69 @@ def run_pf_gating():
     check(tail == [], 'sin /nav/active_mode reciente (> 3 s) no publica movimiento')
 
 
+def run_map_origin():
+    print('\n[13] coverage_map: origin_ll por /toLL, reenvio si cambia el datum; bridge: /blade/status -> robot/status.blade_status')
+    from lawnbot_nav.coverage_map import CoverageMap
+    cm = make(CoverageMap, origin_refresh_s=10.0)
+    client = cm.clients['toLL']
+    tick = cm.timer(0.1)
+    cm.subs['geofence/polygon'](_polygon([(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]))
+    R.set_pose('map', 'base_footprint', 1.0, 1.0)
+
+    def run(seconds):
+        for _ in range(int(seconds / 0.1)):
+            R.advance(0.1)
+            R.set_pose('map', 'base_footprint', 1.0, 1.0)
+            tick()
+
+    def answer(lat, lng):
+        for req, fut in client.calls:
+            check(req.map_point.x == 0.0 and req.map_point.y == 0.0, '   la consulta es por el origen (0, 0) del mapa')
+            fut.resolve(R.Msg(ll_point=R.Msg(latitude=lat, longitude=lng, altitude=0.0)))
+        client.calls.clear()
+
+    sent = lambda: [json.loads(m.data) for m in cm.pubs['coverage/map'].sent]   # noqa: E731
+    run(3.0)
+    check(not client.calls and 'origin_ll' not in sent()[-1], 'toLL no disponible: no consulta y el mapa sale sin origin_ll')
+    client.ready = True
+    run(0.2)
+    check(len(client.calls) == 1, 'con el servicio disponible consulta toLL')
+    answer(0.0, 0.0)
+    run(0.2)
+    check(cm.origin_ll is None and cm.get_logger().has('toLL sin transformacion lista', 'WARN'), 'respuesta (0, 0): navsat no esta listo, no se usa y se avisa')
+    run(0.5)
+    check(len(client.calls) == 1, '   y reintenta enseguida')
+    answer(-25.2867, -57.6470)
+    n = len(sent())
+    run(2.5)
+    check(cm.origin_ll == (-25.2867, -57.6470) and sent()[-1]['origin_ll'] == [-25.2867, -57.6470], 'origen valido: el mapa lleva origin_ll [lat, lng]')
+    check(len(sent()) > n and sent()[-1]['width'] > 0, '   sin perder el resto del contrato (width, passes, ...)')
+    run(10.5)
+    answer(-25.2867, -57.6470)
+    n = len(sent())
+    run(0.5)
+    check(len(sent()) == n, 'consulta periodica con el mismo origen: no reenvia de mas')
+    run(10.5)
+    answer(-25.2867 + 1e-9, -57.6470)
+    run(0.5)
+    check(cm.origin_ll == (-25.2867, -57.6470), 'cambio menor que la tolerancia: se ignora')
+    run(10.5)
+    answer(-25.2900, -57.6500)
+    n = len(sent())
+    run(0.2)
+    check(sent()[-1]['origin_ll'] == [-25.29, -57.65] and len(sent()) == n + 1, 'cambia el datum: reenvia el mapa de inmediato con el origen nuevo')
+    check(cm.get_logger().has('cambio de datum', 'INFO'), '   y lo deja en el log')
+
+    fixed = make(CoverageMap, origin_source='param', origin_lat=-25.3, origin_lng=-57.6)
+    check(fixed.origin_ll == (-25.3, -57.6) and 'toLL' not in fixed.clients, "origin_source 'param': usa el origen fijo sin servicio")
+    try:
+        make(CoverageMap, origin_source='param')
+        check(False, 'param sin coordenadas debe fallar')
+    except ValueError:
+        check(True, "origin_source 'param' sin lat/lng: falla con mensaje claro")
+    none = make(CoverageMap, origin_source='none')
+    check(none.origin_ll is None and 'toLL' not in none.clients, "origin_source 'none': sin origin_ll")
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1528,4 +1602,5 @@ if __name__ == '__main__':
     run_events()
     run_potential_field()
     run_pf_gating()
+    run_map_origin()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
