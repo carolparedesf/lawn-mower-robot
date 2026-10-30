@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- MQTT al broker de la Pi y mosaicos del mapa. Sin esto las compilaciones release no tienen red. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="robotmapapp"
         android:name="${applicationName}"
