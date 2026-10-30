@@ -509,7 +509,7 @@ Publicado con QoS 1 (garantizado). El robot debe responder publicando su nuevo e
 
 #### `robot/cmd/geofence` — Zona geofence
 
-Publicado con QoS 1 cuando el usuario dibuja un polígono en el mapa y presiona "Enviar". Contiene mínimo 3 puntos. El polígono es cerrado (el último punto se conecta con el primero).
+Publicado con QoS 1 cuando el usuario dibuja un polígono en el mapa y presiona "Enviar". Contiene mínimo 4 puntos y es un polígono simple y convexo (la app no deja enviar otro). El polígono es cerrado (el último punto se conecta con el primero).
 
 ```json
 {

@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import '../providers/geofence_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
+import '../models/geofence.dart';
+import '../widgets/geofence_notices.dart';
 import '../widgets/geofence_toolbar.dart';
 import '../widgets/robo_top_bar.dart';
 
@@ -22,6 +24,9 @@ class GeofenceScreen extends StatefulWidget {
 }
 
 class _GeofenceScreenState extends State<GeofenceScreen> {
+  final MapController _mapController = MapController();
+  bool _centeredOnRobot = false;
+
   @override
   Widget build(BuildContext context) {
     final geofence = context.watch<GeofenceProvider>();
@@ -31,6 +36,22 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
         ? LatLng(robotPos.lat, robotPos.lng)
         : _defaultCenter;
     final geofenceBreach = robotState.currentStatus.hasGeofenceBreach;
+    // Invalid shapes (not just "too few points") are drawn with the error color.
+    final problem = geofence.problem;
+    final badShape = problem == GeofenceProblem.selfIntersecting ||
+        problem == GeofenceProblem.notConvex;
+
+    // La posición del robot suele llegar después del primer build (viene
+    // por GPS/MQTT) — initialCenter del mapa ya quedó fijo en ese momento,
+    // así que la primera vez que tenemos una posición real hay que mover
+    // la cámara a mano, una sola vez (no interrumpe el paneo del usuario
+    // mientras marca los puntos del cerco después de eso).
+    if (robotPos != null && !_centeredOnRobot) {
+      _centeredOnRobot = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _mapController.move(center, 18);
+      });
+    }
 
     return Column(
       children: [
@@ -64,6 +85,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
               child: Stack(
                 children: [
                   FlutterMap(
+                    mapController: _mapController,
                     options: MapOptions(
                       initialCenter: center,
                       initialZoom: 18,
@@ -83,7 +105,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                               points: geofence.points,
                               color: RoboColors.primaryGreen
                                   .withValues(alpha: 0.35),
-                              borderColor: geofenceBreach
+                              borderColor: (geofenceBreach || badShape)
                                   ? RoboColors.error
                                   : RoboColors.darkGreen,
                               borderStrokeWidth: geofenceBreach ? 3 : 3,
@@ -126,21 +148,31 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                   Positioned(
                     top: 10,
                     left: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.92),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Text(
-                        'Tocá el mapa para agregar puntos',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: RoboColors.darkGreen,
+                    right: 10,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Text(
+                            'Tocá el mapa para agregar puntos',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: RoboColors.darkGreen,
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(height: 6),
+                        const GeofenceProblemBanner(),
+                        const SizedBox(height: 6),
+                        const GeofenceRobotStatus(),
+                      ],
                     ),
                   ),
                   const Positioned(

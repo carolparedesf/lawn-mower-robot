@@ -27,7 +27,7 @@ lib/
 │   ├── robot_position.dart           # lat, lng, heading, timestamp — fromJson/toJson
 │   ├── robot_command.dart            # direction, speed, mode — fromJson/toJson
 │   ├── robot_status.dart             # mode, battery, alert — fromJson/toJson
-│   └── geofence.dart                 # List<LatLng>, validación mín 3 puntos, toJson
+│   └── geofence.dart                 # List<LatLng>, validación (mín 4 puntos, simple y convexo), toJson
 ├── providers/
 │   ├── connection_provider.dart      # ChangeNotifier: estado conexión MQTT
 │   ├── robot_state_provider.dart     # ChangeNotifier: posición, modo, batería (se alimenta de MqttService streams)
@@ -65,7 +65,7 @@ lib/
 - **MqttService:** singleton con `StreamController` por cada topic de entrada. Los providers escuchan estos streams.
 - **No hardcodear** host/port del broker. Todo en `mqtt_config.dart`.
 - **Joystick:** emitir comandos con throttle de 50ms (20 Hz máx) para no saturar el broker.
-- **Geofence:** validar mínimo 3 puntos antes de permitir envío. El polígono se cierra automáticamente (último punto conecta con el primero).
+- **Geofence:** validar antes de permitir envío: mínimo 4 puntos, polígono simple (sin cruces) y convexo (el robot solo acepta esos). El polígono se cierra automáticamente (último punto conecta con el primero).
 - **Dispose:** siempre cancelar suscripciones y cerrar streams en `dispose()`.
 
 ## Dependencias (pubspec.yaml)
