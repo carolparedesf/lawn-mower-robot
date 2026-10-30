@@ -508,7 +508,7 @@ El nodo `robot_events` (`config/robot_events.yaml`, arranca con `nav.launch.py`)
 `low_battery` tiene histéresis: avisa **una vez** y solo se rearma al subir a umbral + `low_battery_margin` (25 %); con `low_battery_repeat_s` > 0 hay recordatorio periódico (0 = no).
 Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer dato tras arrancar el nodo no genera eventos (reiniciar no dispara nada falso).
 
-- **App:** el bridge pone el evento en `robot/status.alert` durante 5 s, **solo si no hay una alerta de seguridad** (`/nav/safety_alert` manda). Contrato intacto. `bridge/status_alert.py` hay que copiarlo a la Pi junto a `bridge.py`.
+- **App:** el bridge pone el evento en `robot/status.alert` durante 5 s, **solo si no hay una alerta de seguridad** (`/nav/safety_alert` manda). Contrato intacto. `bridge/status_alert.py` hay que copiarlo a la Pi junto a `bridge.py` (ver *Despliegue del bridge* en Pendientes).
 - **Buzzer (quien lo maneje):** suscribirse a `/robot/events` (`ros2 topic echo /robot/events`) y mapear cada nombre a un patrón de sonido. **No se tocó el firmware**: hoy el firmware no escucha este topic.
 - Pruebas sin ROS: `PYTHONPATH=. python3 test/test_events.py`, `python3 bridge/test_status_alert.py` y el escenario [10] de `tools/node_scenarios.py`.
 
@@ -523,5 +523,9 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   (≈ 6,7 Hz) mientras está presionado. El joystick llama a su `listener` cada 100 ms (`period` por defecto de
   `flutter_joystick` 0.1.0, también con el stick quieto) y la app publica con un retardo de 50 ms: ≈ 10 Hz.
   Ambos quedan bien por debajo de los 0,5 s de `twist_mux`, `safety_gate` y del watchdog del firmware.
-- **Despliegue:** copiar el `bridge.py` nuevo a la Pi (`~/pi/bridge.py`) con backup, y reiniciar `bridge.service`.
+- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
+  `sudo systemctl restart bridge.service`. Si falta un auxiliar, `bridge.py` **no arranca** y dice cuál falta (`journalctl -u bridge.service -n 20`).
+  ```bash
+  scp bridge/bridge.py bridge/actuator_relay.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
+  ```
   Hasta entonces la Pi sigue con el bridge viejo.

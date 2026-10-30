@@ -34,8 +34,12 @@ from std_msgs.msg import Bool, Float32, String
 import paho.mqtt.client as mqtt
 import gpsd
 
-from actuator_relay import ActuatorRelay, mode_allows_actuators
-from status_alert import pick_alert
+try:
+    from actuator_relay import ActuatorRelay, mode_allows_actuators
+    from status_alert import pick_alert
+except ImportError as exc:
+    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py y status_alert.py juntos "
+             "a ~/pi/ (scp bridge/{bridge,actuator_relay,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
 
 BROKER = "localhost"
 
