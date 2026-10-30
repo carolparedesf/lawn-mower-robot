@@ -1,0 +1,17 @@
+berryimu_driver:
+  ros__parameters:
+    gyro_bias_x: 431.37
+    gyro_bias_y: -280.87
+    gyro_bias_z: -901.09
+    accel_offset_x: -0.0870
+    accel_offset_y: 0.0442
+    accel_offset_z: -0.0332
+    accel_scale_x: 1.0
+    accel_scale_y: 1.0
+    accel_scale_z: 1.0
+    mag_offset_x: 0.0547
+    mag_offset_y: 0.3795
+    mag_offset_z: -0.0557
+    publish_rate_hz: 50.0
+    # Calibra el giroscopio al arrancar (robot quieto ~3 s); sobreescribe gyro_bias_*
+    auto_calibrate_gyro: true
