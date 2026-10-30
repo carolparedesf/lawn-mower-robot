@@ -1,0 +1,35 @@
+# Seguidor de waypoints. NO arranca solo: espera `true` en /follower/enable.
+# Waypoints: lista plana [x0, y0, x1, y1, ...] en metros (YAML de ROS 2 no admite listas de listas).
+# Usar siempre decimales (3.0, no 3): ROS 2 rechaza un entero en un parametro declarado como decimal.
+waypoint_follower:
+  ros__parameters:
+    frame_id: odom              # odom (odometria) o map (GPS; entonces relative_to_start: false)
+    base_frame: base_footprint
+
+    # Cuadrado de 3 m x 3 m empezando en (0, 0), antihorario. Con relative_to_start: true,
+    # (0, 0) es la pose del robot al habilitar y +x es su rumbo en ese momento.
+    waypoints: [0.0, 0.0,
+                3.0, 0.0,
+                3.0, 3.0,
+                0.0, 3.0,
+                0.0, 0.0]
+    relative_to_start: true     # false: waypoints absolutos del frame (usar con frame_id: map)
+    loop: false
+
+    lookahead_distance: 0.5     # m
+    goal_tolerance: 0.2         # m
+    max_linear: 0.2             # m/s
+    max_angular: 0.6            # rad/s
+    # Pisos para la zona muerta del PWM (0 = sin piso). Valores de partida a ajustar en el suelo:
+    min_linear: 0.05            # m/s al avanzar
+    min_turn: 0.25              # rad/s al girar en el lugar
+    rotate_in_place_angle: 0.7  # rad: por encima gira en el lugar antes de avanzar
+    slowdown_radius: 0.6        # m: reduce la velocidad al acercarse al waypoint
+
+    progress_timeout: 20.0      # s sin acercarse (ni reducir el error de rumbo al girar) -> ERROR
+    tf_abort_s: 3.0             # s sin pose -> ERROR (antes de eso publica cero)
+    pose_timeout: 0.5           # s: pose mas vieja que esto se considera perdida
+
+    allowed_modes: [manual]     # modo de la app en que se permite navegar
+    require_active_mode: true   # false solo para pruebas sin bridge (p. ej. con fake_robot)
+    pause_on_manual: true       # cualquier mensaje en /cmd_vel_manual pausa

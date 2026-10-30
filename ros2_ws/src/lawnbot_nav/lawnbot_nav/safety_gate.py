@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Ultima barrera antes del firmware: filtra /cmd_vel_mux y publica /cmd_vel.
+
+Solo limita o anula velocidades, nunca las amplifica. Publica a ritmo fijo; si la entrada
+esta vieja publica cero. Las reglas estan en safety_logic.py y los parametros en el YAML.
+"""
+import time
+
+import rclpy
+from geometry_msgs.msg import Twist
+from rclpy.node import Node
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy, qos_profile_sensor_data)
+from sensor_msgs.msg import Range
+from std_msgs.msg import Bool, String
+
+from lawnbot_nav.safety_logic import (SafetyParams, SafetyState,
+                                      apply_safety)
+
+LATCHED = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST, depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+SONARS = ('left', 'center', 'right')
+
+
+class SafetyGate(Node):
+    def __init__(self):
+        super().__init__('safety_gate')
+
+        self.declare_parameter('input_topic', 'cmd_vel_mux')
+        self.declare_parameter('output_topic', 'cmd_vel')
+        self.declare_parameter('publish_rate_hz', 20.0)
+        self.declare_parameter('input_timeout', 0.5)
+        self.declare_parameter('sensor_timeout', 1.0)
+        self.declare_parameter('max_linear', 0.5)
+        self.declare_parameter('max_angular', 1.5)
+        self.declare_parameter('sonar_slow_distance', 0.30)
+        self.declare_parameter('sonar_stop_distance', 0.15)
+        for s in SONARS:
+            self.declare_parameter(f'sonar_{s}_enabled', True)
+            self.declare_parameter(f'sonar_{s}_topic', f'sonar/{s}')
+        self.declare_parameter('bumper_front_topics',
+                               ['bumper/B1_front_left', 'bumper/B2_front_right'])
+        self.declare_parameter('bumper_back_topics', ['bumper/B5_back'])
+        self.declare_parameter('bumper_monitor_topics',
+                               ['bumper/B3_left', 'bumper/B4_right'])
+
+        gp = self.get_parameter
+        self.params = SafetyParams(
+            sonar_slow_distance=gp('sonar_slow_distance').value,
+            sonar_stop_distance=gp('sonar_stop_distance').value,
+            max_linear=gp('max_linear').value,
+            max_angular=gp('max_angular').value)
+        self.input_timeout = gp('input_timeout').value
+        self.sensor_timeout = gp('sensor_timeout').value
+
+        self.v_in = 0.0
+        self.w_in = 0.0
+        self.last_in = None
+
+        # Estado de sensores: nombre -> (valor, instante de recepcion)
+        self.sonar = {}
+        self.bumper = {}
+        self.sonar_enabled = {s: gp(f'sonar_{s}_enabled').value for s in SONARS}
+        self.front_topics = list(gp('bumper_front_topics').value)
+        self.back_topics = list(gp('bumper_back_topics').value)
+        self.monitor_topics = list(gp('bumper_monitor_topics').value)
+
+        for s in SONARS:
+            if self.sonar_enabled[s]:
+                self.create_subscription(
+                    Range, gp(f'sonar_{s}_topic').value,
+                    lambda msg, s=s: self.on_sonar(s, msg), qos_profile_sensor_data)
+        for topic in self.front_topics + self.back_topics + self.monitor_topics:
+            self.create_subscription(
+                Bool, topic, lambda msg, t=topic: self.on_bumper(t, msg),
+                qos_profile_sensor_data)
+
+        self.create_subscription(Twist, gp('input_topic').value, self.on_input, 10)
+        self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
+        self.alert_pub = self.create_publisher(String, 'nav/safety_alert', LATCHED)
+
+        self.alert = None
+        self.last_alert_pub = 0.0
+        self.create_timer(1.0 / gp('publish_rate_hz').value, self.tick)
+
+        enabled = [s for s in SONARS if self.sonar_enabled[s]]
+        self.get_logger().info(
+            f'safety_gate listo: sonares {enabled}, bumpers frontales {self.front_topics}, '
+            f'traseros {self.back_topics}, solo monitoreo {self.monitor_topics}')
+
+    # ── Entradas ─────────────────────────────────────────────
+
+    def on_input(self, msg):
+        self.v_in = msg.linear.x
+        self.w_in = msg.angular.z
+        self.last_in = time.monotonic()
+
+    def on_sonar(self, name, msg):
+        self.sonar[name] = (float(msg.range), time.monotonic())
+
+    def on_bumper(self, topic, msg):
+        prev = self.bumper.get(topic, (None, 0.0))[0]
+        self.bumper[topic] = (bool(msg.data), time.monotonic())
+        if topic in self.monitor_topics and prev != bool(msg.data):
+            self.get_logger().info(f'{topic}: {"presionado" if msg.data else "libre"} (solo monitoreo)')
+
+    # ── Estado de seguridad ──────────────────────────────────
+
+    def fresh(self, entry, now):
+        return entry is not None and now - entry[1] <= self.sensor_timeout
+
+    def build_state(self, now):
+        ranges = []
+        stale = False
+        for s in SONARS:
+            if not self.sonar_enabled[s]:
+                continue
+            entry = self.sonar.get(s)
+            if self.fresh(entry, now):
+                ranges.append(entry[0])
+            else:
+                stale = True
+
+        front = False
+        for topic in self.front_topics:
+            entry = self.bumper.get(topic)
+            if self.fresh(entry, now):
+                front = front or entry[0]
+            else:
+                stale = True
+
+        # Un bumper trasero viejo no bloquea (solo se bloquea el avance por sensores viejos)
+        back = any(self.fresh(self.bumper.get(t), now) and self.bumper[t][0]
+                   for t in self.back_topics)
+
+        return SafetyState(sonar_ranges=ranges, front_pressed=front,
+                           back_pressed=back, stale=stale)
+
+    # ── Salida ───────────────────────────────────────────────
+
+    def tick(self):
+        now = time.monotonic()
+        if self.last_in is None or now - self.last_in > self.input_timeout:
+            v_cmd, w_cmd = 0.0, 0.0
+        else:
+            v_cmd, w_cmd = self.v_in, self.w_in
+
+        state = self.build_state(now)
+        v, w, alert = apply_safety(v_cmd, w_cmd, state, self.params)
+
+        out = Twist()
+        out.linear.x = float(v)
+        out.angular.z = float(w)
+        self.pub.publish(out)
+
+        if alert != self.alert or now - self.last_alert_pub >= 1.0:
+            if alert != self.alert:
+                self.get_logger().info(f'alerta: {alert}')
+            self.alert = alert
+            self.last_alert_pub = now
+            self.alert_pub.publish(String(data=alert))
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SafetyGate()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == '__main__':
+    main()

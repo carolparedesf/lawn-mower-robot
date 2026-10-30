@@ -1,0 +1,31 @@
+safety_gate:
+  ros__parameters:
+    input_topic: cmd_vel_mux
+    output_topic: cmd_vel
+    publish_rate_hz: 20.0
+    # Sin comando de entrada en este tiempo [s] se publica cero
+    input_timeout: 0.5
+    # Sensor requerido (sonar habilitado o bumper frontal) sin datos en este tiempo [s]:
+    # se bloquea el avance; retroceso y giro siguen permitidos
+    sensor_timeout: 1.0
+
+    # Limites extra: solo reducen, nunca amplifican
+    max_linear: 0.5      # m/s
+    max_angular: 1.5     # rad/s
+
+    # Reglas de distancia sobre el MINIMO de los sonares habilitados [m]
+    sonar_slow_distance: 0.30   # por debajo: avance proporcional
+    sonar_stop_distance: 0.15   # por debajo: avance prohibido
+    sonar_left_enabled: true
+    sonar_center_enabled: true
+    sonar_right_enabled: true
+    sonar_left_topic: sonar/left
+    sonar_center_topic: sonar/center
+    sonar_right_topic: sonar/right
+
+    # Bumpers frontales: prohiben avance (retroceso y giro permitidos)
+    bumper_front_topics: [bumper/B1_front_left, bumper/B2_front_right]
+    # Bumpers traseros: prohiben retroceso
+    bumper_back_topics: [bumper/B5_back]
+    # Laterales: sin efecto sobre el movimiento (solo se registran en el log)
+    bumper_monitor_topics: [bumper/B3_left, bumper/B4_right]
