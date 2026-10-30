@@ -1,0 +1,24 @@
+# Un nodo por patron; los tres usan el mismo ejecutable (nav_stub). Patrones a ciegas (sin GPS).
+nav_stub_parallel:
+  ros__parameters:
+    pattern: parallel
+    rate_hz: 20.0
+    linear: 0.3
+    turn: 1.0
+    straight_s: 3.0
+    turn_s: 1.0
+
+nav_stub_random:
+  ros__parameters:
+    pattern: random
+    rate_hz: 20.0
+    linear: 0.3
+    turn: 1.0
+    min_s: 1.0
+    max_s: 3.0
+
+nav_stub_perimeter:
+  ros__parameters:
+    pattern: perimeter
+    rate_hz: 20.0
+    linear: 0.2

@@ -1,0 +1,6 @@
+mode_manager:
+  ros__parameters:
+    # Segundos sin recibir /robot_mode (heartbeat del bridge) antes de pasar a 'idle'
+    heartbeat_timeout: 3.0
+    publish_period: 1.0
+    valid_modes: [idle, stop, manual, auto_parallel, auto_random, auto_perimeter]

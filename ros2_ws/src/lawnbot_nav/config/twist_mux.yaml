@@ -1,0 +1,25 @@
+# Mayor prioridad gana mientras su topic no haya vencido (timeout).
+# Salida: cmd_vel_out, remapeada a /cmd_vel_mux en el launch.
+twist_mux:
+  ros__parameters:
+    topics:
+      manual:
+        topic: cmd_vel_manual
+        timeout: 0.5
+        priority: 100
+      waypoints:
+        topic: cmd_vel_waypoint
+        timeout: 0.5
+        priority: 50
+      perimeter:
+        topic: cmd_vel_perimeter
+        timeout: 0.5
+        priority: 30
+      parallel:
+        topic: cmd_vel_parallel
+        timeout: 0.5
+        priority: 20
+      random:
+        topic: cmd_vel_random
+        timeout: 0.5
+        priority: 10
