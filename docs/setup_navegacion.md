@@ -425,9 +425,10 @@ Payload **real** de la app (`robot/cmd/actuator`, QoS 1, uno por cada cambio; la
 `charging` no se atiende. La lógica está en `bridge/actuator_relay.py` (**hay que copiarlo a la Pi junto a `bridge.py`**, en `~/pi/`).
 
 - El bridge **republica a 4 Hz** `/cutter/enable`, `/trimmer/enable` y `/blade/force_cut` mientras el pedido siga vigente; `blade_controller` los vence a los 2 s sin refresco (así, si el bridge muere, se apaga).
-- **Solo con un modo automático vigente** (`auto_parallel`, `auto_random`, `auto_perimeter` según `/nav/active_mode`). Se apaga y se **borra** al pasar a `idle`, `stop` o `manual`, y si
-  se pierde el heartbeat del modo (3 s sin `/nav/active_mode`). Al volver a un modo automático **sigue apagado** hasta que la app pida de nuevo. Arranca siempre apagado.
-  Un pedido que llega fuera de un modo automático se ignora. Solo el booleano `true` enciende (`"true"`, `1` o `null` no cuentan).
+- **Solo con un modo vigente que lo permita:** `manual` o automático (`auto_parallel`, `auto_random`, `auto_perimeter` según `/nav/active_mode`). Se apaga y se **borra** al pasar a `idle` o `stop`, y si
+  se pierde el heartbeat del modo (3 s sin `/nav/active_mode`). Pasar de manual a automático (o al revés) **no** lo apaga. Tras apagarse por esas causas **sigue apagado** hasta que la app pida de nuevo. Arranca siempre apagado.
+  Un pedido que llega en `idle`/`stop` se ignora. Solo el booleano `true` enciende (`"true"`, `1` o `null` no cuentan).
+  En manual `blade_controller` sigue aplicando todo: cerco, levantado, volcado, estop, datos vigentes y pasto (que solo `force_cut` anula).
 - **`robot/status`** (contrato intacto, claves nuevas): `blade` y `trimmer` = lo pedido y aceptado (la app arma su próximo comando a partir de ellos, así que tienen que estar), `force_cut`,
   y `blade_running` / `trimmer_running` = el motor corre de verdad (`/cutter/cmd` o `/trimmer/cmd` > 0 y vigente; puede estar en `false` con el pedido en `true` si una condición lo apaga).
 
