@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Reemplazo de la camara mientras no este calibrada: publica /vision/obstacles vacio y /vision/grass_present fijo.
 
-grass_present arranca en False (la cuchilla no enciende). Ponerlo en true solo para pruebas de banco.
+grass_present es False por defecto (la cuchilla no enciende). Solo se pone en true con el argumento explicito del
+launch `vision_stub_grass_present:=true` (pruebas de banco), y mientras este activo se avisa en el log cada 10 s.
 """
+import time
+
 from geometry_msgs.msg import PoseArray
 from rclpy.node import Node
 from std_msgs.msg import Bool
@@ -22,9 +25,22 @@ class VisionStub(Node):
         self.obstacles_pub = self.create_publisher(PoseArray, 'vision/obstacles', 10)
         self.grass_pub = self.create_publisher(Bool, 'vision/grass_present', 10)
         self.create_timer(1.0 / gp('rate_hz').value, self.tick)
-        self.get_logger().info(f'vision_stub: obstaculos vacios, grass_present={self.grass}')
+        self.last_warn = 0.0
+        self.warn_period = 10.0
+        if self.grass:
+            self.warn_grass()
+        else:
+            self.get_logger().info('vision_stub: obstaculos vacios, grass_present=false (la cuchilla no enciende)')
+
+    def warn_grass(self):
+        self.get_logger().warn(
+            'vision_stub publica grass_present=TRUE sin camara: NO hay deteccion real de pasto. '
+            'Solo para pruebas de banco con los motores desconectados.')
+        self.last_warn = time.monotonic()
 
     def tick(self):
+        if self.grass and time.monotonic() - self.last_warn >= self.warn_period:
+            self.warn_grass()
         msg = PoseArray()
         msg.header.frame_id = self.frame_id
         msg.header.stamp = self.get_clock().now().to_msg()

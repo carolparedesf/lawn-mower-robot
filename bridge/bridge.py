@@ -5,8 +5,11 @@ MQTT -> ROS:
   robot/cmd/mode     -> /robot_mode      (String, transient_local; se republica cada 1 s: heartbeat)
   robot/cmd/move     -> /cmd_vel_manual  (Twist, solo en modo manual)
   robot/cmd/geofence -> /geofence_raw    (String con el JSON recibido, transient_local)
+  robot/cmd/actuator -> /cutter/enable, /trimmer/enable, /blade/force_cut (Bool, 4 Hz mientras se mantenga;
+                        payload {"blade","trimmer","charging"} + "force_cut" opcional; ver actuator_relay.py)
 ROS -> MQTT:
-  robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert)
+  robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
+                        blade/trimmer/force_cut pedidos y blade_running/trimmer_running reales
   robot/position     <- gpsd (hilo propio, sin cambios)
   robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
 
@@ -14,17 +17,22 @@ La navegacion automatica ya no vive aqui: la resuelven mode_manager / twist_mux 
 (paquete lawnbot_nav). El bridge no publica en /cmd_vel.
 """
 import json
+import os
+import sys
 import threading
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # actuator_relay.py va junto a este archivo
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import BatteryState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 import paho.mqtt.client as mqtt
 import gpsd
+
+from actuator_relay import ActuatorRelay
 
 BROKER = "localhost"
 
@@ -33,6 +41,8 @@ HEARTBEAT_PERIOD_S = 1.0    # /robot_mode; mode_manager pasa a idle si pasan 3 s
 ACTIVE_MODE_STALE_S = 3.0   # sin /nav/active_mode reciente se informa 'idle'
 BATTERY_STALE_S = 5.0
 BATTERY_MIN_VALID_V = 1.0   # el firmware publica 0 V si el INA228 no esta conectado
+ENABLE_PERIOD_S = 0.25      # los pedidos de encendido se republican a 4 Hz; blade_controller los vence a los 2 s
+MOTOR_CMD_STALE_S = 1.0     # /cutter/cmd viejo = el motor no esta corriendo
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -49,6 +59,10 @@ class RobotBridge(Node):
         self.estop_pub   = self.create_publisher(Bool, 'estop', 10)
         self.mode_pub    = self.create_publisher(String, 'robot_mode', LATCHED)
         self.geofence_pub = self.create_publisher(String, 'geofence_raw', LATCHED)
+        # Pedidos de encendido: volatiles a proposito (un reinicio nunca deja nada encendido)
+        self.cutter_enable_pub = self.create_publisher(Bool, 'cutter/enable', 10)
+        self.trimmer_enable_pub = self.create_publisher(Bool, 'trimmer/enable', 10)
+        self.force_cut_pub = self.create_publisher(Bool, 'blade/force_cut', 10)
 
         # Subscribers ROS2
         self.create_subscription(String, 'nav/active_mode', self.on_active_mode, LATCHED)
@@ -56,6 +70,8 @@ class RobotBridge(Node):
         self.create_subscription(BatteryState, 'battery/state', self.on_battery,
                                  qos_profile_sensor_data)
         self.create_subscription(String, 'coverage/map', self.on_coverage_map, 10)
+        self.create_subscription(Float32, 'cutter/cmd', lambda m: self.on_motor_cmd('cutter', m), 10)
+        self.create_subscription(Float32, 'trimmer/cmd', lambda m: self.on_motor_cmd('trimmer', m), 10)
 
         # Estado
         self.requested_mode = "idle"
@@ -65,6 +81,8 @@ class RobotBridge(Node):
         self.battery_pct = None
         self.battery_time = 0.0
         self.geofence_points = []
+        self.relay = ActuatorRelay()            # arranca apagado
+        self.motor_cmd = {}                     # motor -> (duty publicado, instante)
 
         # MQTT
         self.mqtt = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="robot_pi")
@@ -75,6 +93,7 @@ class RobotBridge(Node):
         # Heartbeat del modo y estado periodico
         self.create_timer(HEARTBEAT_PERIOD_S, self.publish_mode)
         self.create_timer(STATUS_PERIOD_S, self.publish_status)
+        self.create_timer(ENABLE_PERIOD_S, self.publish_enables)
         self.publish_mode()
 
         # GPS thread
@@ -94,6 +113,7 @@ class RobotBridge(Node):
         client.subscribe("robot/cmd/move", qos=0)
         client.subscribe("robot/cmd/mode", qos=1)
         client.subscribe("robot/cmd/geofence", qos=1)
+        client.subscribe("robot/cmd/actuator", qos=1)
 
     def on_message(self, client, userdata, msg):
         try:
@@ -112,6 +132,13 @@ class RobotBridge(Node):
             self.get_logger().info(f"Modo pedido: {self.requested_mode}")
             self.send_stop()
             self.publish_mode()
+
+        elif msg.topic == "robot/cmd/actuator":
+            accepted = self.relay.on_command(payload, self.actuator_mode_ok())
+            if not accepted:
+                self.get_logger().info("Pedido de actuadores ignorado (sin modo automatico vigente): todo apagado")
+            self.publish_enables()
+            self.publish_status()
 
         elif msg.topic == "robot/cmd/geofence":
             self.geofence_points = payload.get("points", [])
@@ -154,6 +181,29 @@ class RobotBridge(Node):
 
     # ── ROS2 subscribers -> robot/status ──────────────────────
 
+    def effective_mode(self):
+        """Modo que aplico mode_manager; 'idle' si no hay mensaje reciente (heartbeat perdido)."""
+        if self.active_mode is None or time.monotonic() - self.active_mode_time > ACTIVE_MODE_STALE_S:
+            return "idle"
+        return self.active_mode
+
+    def actuator_mode_ok(self):
+        return self.effective_mode().startswith("auto_")
+
+    def publish_enables(self):
+        """Republica los pedidos a 4 Hz mientras la app los mantenga y haya un modo automatico vigente."""
+        blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())
+        self.cutter_enable_pub.publish(Bool(data=blade))
+        self.trimmer_enable_pub.publish(Bool(data=trimmer))
+        self.force_cut_pub.publish(Bool(data=force_cut))
+
+    def on_motor_cmd(self, name, msg):
+        self.motor_cmd[name] = (float(msg.data), time.monotonic())
+
+    def motor_running(self, name):
+        duty, t = self.motor_cmd.get(name, (0.0, 0.0))
+        return duty > 0.0 and time.monotonic() - t <= MOTOR_CMD_STALE_S
+
     def on_active_mode(self, msg):
         changed = msg.data != self.active_mode
         self.active_mode = msg.data
@@ -190,6 +240,14 @@ class RobotBridge(Node):
         if self.battery_pct is not None and now - self.battery_time <= BATTERY_STALE_S:
             status["battery"] = int(round(self.battery_pct))
         status["alert"] = self.alert
+        # Estado de los actuadores: "blade"/"trimmer" son lo pedido y aceptado (la app arma su proximo comando a partir
+        # de ellos); "*_running" es si el motor esta corriendo de verdad (puede estar apagado por una condicion)
+        blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())
+        status["blade"] = blade
+        status["trimmer"] = trimmer
+        status["force_cut"] = force_cut
+        status["blade_running"] = self.motor_running("cutter")
+        status["trimmer_running"] = self.motor_running("trimmer")
         self.mqtt.publish("robot/status", json.dumps(status), qos=1)
 
     # ── GPS ───────────────────────────────────────────────────
@@ -220,6 +278,8 @@ def main():
         pass
     finally:
         bridge.requested_mode = "idle"
+        bridge.relay.clear()
+        bridge.publish_enables()
         bridge.send_stop()
         bridge.publish_mode()
         bridge.destroy_node()

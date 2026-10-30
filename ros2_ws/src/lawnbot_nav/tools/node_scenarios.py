@@ -722,6 +722,9 @@ def run_blade():
     load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
     fence = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]
     robot_node = make(FakeRobot, frame_id='map', cmd_topic='cmd_vel', x=1.0, y=3.0, yaw=0.0, tau=0.0)
+    check(make(CoverageMap).res == 0.5, 'coverage_map: celdas de 0,5 m por defecto')
+    small = make(CoverageMap, resolution=0.25)
+    check(small.get_logger().has('menor que 0,5 m', 'WARN'), '   y avisa si se configura una celda menor (error del GPS)')
     cm = make(CoverageMap, **load('coverage_map.yaml', 'coverage_map'))
     bl = make(BladeController, **load('blade_controller.yaml', 'blade_controller'))
     fake_tick, cm_tick, bl_tick = robot_node.timer(0.02), cm.timer(0.1), bl.timer(0.1)
@@ -729,7 +732,8 @@ def run_blade():
     S = {'inside': None, 'grass': True, 'imu': (0.0, 0.0, 0.0, 1.0), 'estop': False,
          'bumpers': {n: False for n in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left',
                                          'bumper/B4_right', 'bumper/B5_back')},
-         'speed': 0.0, 'mute': set(), 'next': R.MONO['t'], 'inside_force': None}
+         'speed': 0.0, 'mute': set(), 'next': R.MONO['t'], 'inside_force': None,
+         'req_cutter': False, 'req_trimmer': False, 'force_cut': False}
     sent = {'cutter': 0, 'trimmer': 0, 'passes': 0}
     max_cutter = [0.0]
     motor = {'duty': 0.0, 'last': -1e9}                    # modelo de cutting_motors (sin hardware): watchdog de 0,5 s
@@ -747,6 +751,10 @@ def run_blade():
             if name not in S['mute']:
                 bl.subs[name](R.Bool(value))
         bl.subs['estop'](R.Bool(S['estop']))
+        # el bridge republica los pedidos a 4 Hz; aca se refrescan en cada ciclo de 10 Hz
+        for key, topic in (('req_cutter', 'cutter/enable'), ('req_trimmer', 'trimmer/enable'), ('force_cut', 'blade/force_cut')):
+            if key not in S['mute']:
+                bl.subs[topic](R.Bool(S[key]))
 
     def step(dt=0.02):
         R.advance(dt)
@@ -783,8 +791,7 @@ def run_blade():
     cm.subs['geofence/polygon'](_polygon(fence))
     run(2.0)
     check(cutter() == 0.0 and trimmer() == 0.0 and 'sin_pedido' in status(), 'sin pedido: todo en 0 (y se publica el 0 a 10 Hz)')
-    bl.subs['cutter/enable'](R.Bool(True))
-    bl.subs['trimmer/enable'](R.Bool(True))
+    S['req_cutter'] = S['req_trimmer'] = True
     run(1.0)
     check(cutter() == 0.3 and trimmer() == 0.3, f'pedido y todo en orden: cuchilla {cutter()} y trimmer {trimmer()} (tope 0,30)')
     check(motor['duty'] == 0.3, '   el modelo de cutting_motors recibe 0,30')
@@ -799,7 +806,72 @@ def run_blade():
         check(cutter() == 0.3, '   y al resolverse vuelve a encender')
 
     # ── una por una, las condiciones ──
-    trips('sin pedido de la cuchilla', lambda: bl.subs['cutter/enable'](R.Bool(False)), lambda: bl.subs['cutter/enable'](R.Bool(True)), both=False)
+    def req_off():
+        S['req_cutter'] = False
+    def req_on():
+        S['req_cutter'] = True
+    trips('sin pedido de la cuchilla (false del bridge)', req_off, req_on, both=False)
+
+    # el pedido vence a los ~2 s sin refresco (el bridge murio o se perdio el modo)
+    S['mute'].add('req_cutter')
+    t0 = R.MONO['t']
+    run(1.0)
+    check(cutter() == 0.3, 'pedido sin refrescar por 1 s: todavia vigente')
+    while cutter() != 0.0 and R.MONO['t'] - t0 < 5.0:
+        run(0.1)
+    waited = R.MONO['t'] - t0
+    check(cutter() == 0.0 and 1.9 <= waited <= 2.3 and trimmer() == 0.3,
+          f'pedido de la cuchilla sin refresco: vence a los {waited:.1f} s (el del trimmer, refrescado, sigue)')
+    S['mute'].discard('req_cutter')
+    run(0.3)
+    check(cutter() == 0.3, '   y al volver el refresco vuelve a encender')
+
+    # force_cut: anula solo el pasto
+    S['grass'] = False
+    run(0.3)
+    check(cutter() == 0.0, 'sin pasto y sin force_cut: la cuchilla en 0')
+    S['force_cut'] = True
+    run(0.3)
+    check(cutter() == 0.3 and 'force_cut' not in status(), 'con force_cut: la cuchilla corta aunque no haya pasto')
+    S['mute'].add('grass')
+    run(1.3)
+    check(cutter() == 0.3, '   tambien con el dato de pasto viejo')
+    S['mute'].discard('grass')
+    for text, setup, undo in (
+            ('fuera del cerco', lambda: S.update(inside_force=False), lambda: S.update(inside_force=None)),
+            ('estop', lambda: S.update(estop=True), lambda: S.update(estop=False)),
+            ('volcado', lambda: S.update(imu=(0.4067, 0.0, 0.0, 0.9135)), lambda: S.update(imu=(0.0, 0.0, 0.0, 1.0)))):
+        setup()
+        run(0.3)
+        check(cutter() == 0.0, f'force_cut NO anula: {text}')
+        undo()
+        run(3.5)
+    S['bumpers']['bumper/B3_left'] = S['bumpers']['bumper/B4_right'] = True
+    run(0.3)
+    check(cutter() == 0.0, 'force_cut NO anula: levantado')
+    S['bumpers']['bumper/B3_left'] = S['bumpers']['bumper/B4_right'] = False
+    run(3.5)
+    S['mute'].add('imu')
+    run(0.8)
+    check(cutter() == 0.0, 'force_cut NO anula: dato viejo del IMU')
+    S['mute'].discard('imu')
+    run(0.3)
+    S['force_cut'] = False
+    S['grass'] = True
+    run(0.3)
+
+    # umbral de volcado por defecto: 20 grados
+    S['imu'] = (0.1305, 0.0, 0.0, 0.9914)                    # roll de 15 grados
+    run(0.3)
+    check(cutter() == 0.3, 'inclinacion de 15 grados: sigue cortando')
+    S['imu'] = (0.2164, 0.0, 0.0, 0.9763)                    # roll de 25 grados
+    run(0.25)
+    check(cutter() == 0.0 and 'volcado' in status(), 'inclinacion de 25 grados (> 20): apaga en el ciclo siguiente')
+    S['imu'] = (0.0, 0.0, 0.0, 1.0)
+    run(2.5)
+    check(cutter() == 0.0, '   ya nivelada sigue apagada durante la espera')
+    run(1.0)
+    check(cutter() == 0.3, '   y rearma a los 3 s')
     def inside_off():
         S['inside_force'] = False
     def inside_on():
@@ -880,6 +952,180 @@ def run_blade():
     check(cm.pubs['coverage/cell_passes'].last.data == -1, 'shutdown de coverage_map: pasadas desconocidas (-1)')
 
 
+def run_bridge_actuators():
+    print('\n[9] bridge: robot/cmd/actuator -> /cutter/enable, /trimmer/enable, /blade/force_cut  (+ vision_stub)')
+    import importlib.util
+    import threading
+    import types as _types
+    repo = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..'))
+
+    class FakeMqtt:
+        class CallbackAPIVersion:
+            VERSION2 = 2
+
+        class Client:
+            def __init__(self, *a, **k):
+                self.published, self.subscribed = [], []
+                self.on_connect = self.on_message = None
+
+            def connect(self, *a, **k):
+                pass
+
+            def loop_forever(self):
+                pass
+
+            def subscribe(self, topic, qos=0):
+                self.subscribed.append((topic, qos))
+
+            def publish(self, topic, payload, qos=0, retain=False):
+                self.published.append((topic, payload, qos, retain))
+
+    paho = _types.ModuleType('paho')
+    paho_mqtt = _types.ModuleType('paho.mqtt')
+    paho_client = _types.ModuleType('paho.mqtt.client')
+    paho_client.Client, paho_client.CallbackAPIVersion = FakeMqtt.Client, FakeMqtt.CallbackAPIVersion
+    paho_mqtt.client = paho_client
+    sys.modules.update({'paho': paho, 'paho.mqtt': paho_mqtt, 'paho.mqtt.client': paho_client,
+                        'gpsd': _types.ModuleType('gpsd')})
+    real_thread = threading.Thread
+
+    class NoThread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+    threading.Thread = NoThread
+    try:
+        spec = importlib.util.spec_from_file_location('bridge_under_test', os.path.join(repo, 'bridge', 'bridge.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        b = make(mod.RobotBridge)
+    finally:
+        threading.Thread = real_thread
+
+    by_name = lambda name: [cb for _, cb in b.timers if getattr(cb, '__name__', '') == name][0]   # noqa: E731
+    enable_tick, status_tick = by_name('publish_enables'), by_name('publish_status')
+    pubs = {'cutter': b.pubs['cutter/enable'], 'trimmer': b.pubs['trimmer/enable'], 'force': b.pubs['blade/force_cut']}
+
+    def mqtt_msg(topic, payload):
+        raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        b.on_message(None, None, R.Msg(topic=topic, payload=raw))
+
+    def current():
+        return tuple(bool(p.last.data) for p in pubs.values())
+
+    beat = {'mode': None, 'on': True, 'n': 0}
+
+    def tick(seconds):
+        for _ in range(int(round(seconds / 0.25))):
+            R.advance(0.25)
+            beat['n'] += 1
+            if beat['on'] and beat['mode'] and beat['n'] % 4 == 0:        # mode_manager republica /nav/active_mode a 1 Hz
+                b.subs['nav/active_mode'](R.String(beat['mode']))
+            enable_tick()
+
+    def mode(name):
+        beat['mode'] = name
+        b.subs['nav/active_mode'](R.String(name))
+
+    def status():
+        status_tick()
+        return json.loads(b.mqtt.published[-1][1])
+
+    check(any(t == 'robot/cmd/actuator' for t, _ in b.mqtt.subscribed) is False, 'antes de conectar no esta suscripto (on_connect aun no corrio)')
+    b.on_connect(b.mqtt, None, None, 0, None)
+    check(('robot/cmd/actuator', 1) in b.mqtt.subscribed, 'al conectar se suscribe a robot/cmd/actuator con QoS 1')
+    tick(1.0)
+    check(current() == (False, False, False), 'arranca siempre apagado')
+
+    mode('idle')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True, 'charging': False})
+    tick(1.0)
+    check(current() == (False, False, False), 'pedido en modo idle: se ignora, todo apagado')
+    st = status()
+    check(st['blade'] is False and st['trimmer'] is False and st['mode'] == 'idle', '   y robot/status informa blade=false (el switch de la app no se enciende)')
+
+    mode('auto_parallel')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': False, 'charging': False})
+    n0 = len(pubs['cutter'].sent)
+    tick(0.5)
+    check(current() == (True, False, False), 'payload real de la app en modo auto: /cutter/enable true, /trimmer/enable false')
+    tick(9.5)
+    count = len(pubs['cutter'].sent) - n0
+    check(36 <= count <= 44, f'se republica a 4 Hz mientras se mantenga: {count} mensajes en 10 s')
+    st = status()
+    check(st['blade'] is True and st['trimmer'] is False and 'alert' in st and 'mode' in st, 'robot/status lleva blade/trimmer pedidos y conserva mode y alert')
+    b.on_motor_cmd('cutter', R.Float32(0.3))
+    check(status()['blade_running'] is True, '   y blade_running cuando el motor corre de verdad (/cutter/cmd > 0)')
+    R.advance(1.5)
+    check(status()['blade_running'] is False, '   y deja de estarlo si /cutter/cmd se vuelve viejo')
+
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True, 'charging': False, 'force_cut': True})
+    tick(0.5)
+    check(current() == (True, True, True), 'force_cut opcional del payload -> /blade/force_cut true')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True, 'charging': False})
+    tick(0.5)
+    check(current() == (True, True, False), '   y sin force_cut en el payload vuelve a false')
+
+    mqtt_msg('robot/cmd/actuator', {'blade': False, 'trimmer': False, 'charging': False})
+    tick(0.5)
+    check(current() == (False, False, False), 'emergencyStop de la app (todo false): apaga')
+
+    for new_mode in ('idle', 'stop', 'manual'):
+        mode('auto_random')
+        mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True})
+        tick(0.5)
+        mode(new_mode)
+        tick(0.5)
+        check(current() == (False, False, False), f'al pasar a {new_mode}: se apaga')
+        mode('auto_random')
+        tick(1.0)
+        check(current() == (False, False, False), '   y al volver al modo auto sigue apagado hasta que la app pida de nuevo')
+
+    mode('auto_perimeter')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True})
+    tick(0.5)
+    check(current() == (True, True, False), 'pedido de nuevo en auto_perimeter: enciende')
+    beat['on'] = False                                       # nadie renueva /nav/active_mode: heartbeat del modo perdido
+    tick(4.0)
+    check(current() == (False, False, False), 'se pierde el heartbeat del modo (3 s sin /nav/active_mode): se apaga')
+    beat['on'] = True
+    mode('auto_perimeter')
+    tick(1.0)
+    check(current() == (False, False, False), '   y no vuelve solo cuando el modo reaparece')
+
+    mode('auto_parallel')
+    for junk in (b'no es json', json.dumps([1, 2]).encode(), json.dumps({'blade': 'true', 'trimmer': 1}).encode()):
+        mqtt_msg('robot/cmd/actuator', junk)
+        tick(0.5)
+        check(current() == (False, False, False), f'payload invalido {junk[:20]!r}: no enciende nada')
+
+    # los topics existentes del contrato siguen igual
+    mqtt_msg('robot/cmd/mode', {'mode': 'manual'})
+    check(b.pubs['robot_mode'].last.data == 'manual', 'robot/cmd/mode sigue yendo a /robot_mode')
+    b.subs['coverage/map'](R.String('{"x": 1}'))
+    check(b.mqtt.published[-1] == ('robot/map', '{"x": 1}', 0, True), 'robot/map: el mapa de cobertura se reenvia retenido')
+    b.relay.clear()
+
+    # ── vision_stub: grass_present true solo con el parametro explicito y con advertencia ──
+    from lawnbot_nav.vision_stub import VisionStub
+    v = make(VisionStub)
+    v.timer(0.2)()
+    check(v.pubs['vision/grass_present'].last.data is False and not v.get_logger().has('NO hay deteccion', 'WARN'),
+          'vision_stub por defecto: grass_present false y sin advertencia')
+    v2 = make(VisionStub, grass_present=True)
+    check(v2.get_logger().has('NO hay deteccion real de pasto', 'WARN'), 'con grass_present true: advertencia al arrancar')
+    tick2 = v2.timer(0.2)
+    n_warn = sum(1 for lv, t in v2.get_logger().lines if lv == 'WARN')
+    R.advance(11.0)
+    tick2()
+    check(v2.pubs['vision/grass_present'].last.data is True and sum(1 for lv, t in v2.get_logger().lines if lv == 'WARN') == n_warn + 1,
+          '   y la repite cada 10 s mientras este activo')
+    v2.shutdown_cleanup()
+    check(v2.pubs['vision/grass_present'].last.data is False, 'shutdown: grass_present vuelve a false')
+
+
 FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
 L_SHAPE = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)]
 
@@ -905,4 +1151,5 @@ if __name__ == '__main__':
     run_random_and_perimeter()
     run_gate_perimeter()
     run_blade()
+    run_bridge_actuators()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

@@ -129,6 +129,102 @@ class ConditionTests(unittest.TestCase):
             self.assertEqual(d.trimmer, 0.0, kw)
 
 
+class TiltDefaultTests(unittest.TestCase):
+    def test_el_umbral_por_defecto_es_20_grados(self):
+        self.assertEqual(BladeParams().max_tilt_deg, 20.0)
+        core = BladeCore(BladeParams())
+        self.assertEqual(core.evaluate(good(tilt_deg=19.9), 0.0).cutter, 0.3)
+        self.assertEqual(core.evaluate(good(tilt_deg=20.0), 1.0).cutter, 0.3)             # exactamente en el umbral: todavia no
+        self.assertEqual(core.evaluate(good(tilt_deg=20.1), 2.0).cutter, 0.0)
+
+    def test_apaga_de_inmediato_al_superarlo(self):
+        core = BladeCore(BladeParams())
+        d = core.evaluate(good(tilt_deg=5.0), 100.0)
+        self.assertEqual((d.cutter, d.trimmer), (0.3, 0.3))
+        d = core.evaluate(good(tilt_deg=25.0), 100.1)                                       # el ciclo siguiente ya esta en 0
+        self.assertEqual((d.cutter, d.trimmer), (0.0, 0.0))
+        self.assertIn('volcado', d.reasons['cutter'])
+
+    def test_rearma_3_s_despues_de_volver_por_debajo_del_umbral(self):
+        core = BladeCore(BladeParams())
+        core.evaluate(good(tilt_deg=40.0), 10.0)                                            # volcado
+        for t in (10.1, 11.0, 12.0, 12.9):                                                  # nivelado pero en espera
+            self.assertEqual(core.evaluate(good(tilt_deg=3.0), t).cutter, 0.0, t)
+        self.assertEqual(core.evaluate(good(tilt_deg=3.0), 13.1).cutter, 0.3)
+
+    def test_la_espera_se_reinicia_si_vuelve_a_inclinarse(self):
+        core = BladeCore(BladeParams())
+        core.evaluate(good(tilt_deg=40.0), 10.0)
+        core.evaluate(good(tilt_deg=3.0), 12.0)
+        core.evaluate(good(tilt_deg=30.0), 12.5)                                            # rebote: otra vez inclinado
+        self.assertEqual(core.evaluate(good(tilt_deg=3.0), 14.0).cutter, 0.0)               # 3 s desde 12.5
+        self.assertEqual(core.evaluate(good(tilt_deg=3.0), 15.6).cutter, 0.3)
+
+
+class ForceCutTests(unittest.TestCase):
+    def setUp(self):
+        self.core = BladeCore(BladeParams())
+
+    def test_force_cut_ignora_el_pasto_ausente_o_sin_dato(self):
+        for grass in (False, None):
+            d = self.core.evaluate(good(grass=grass, force_cut=True), 0.0)
+            self.assertEqual(d.cutter, 0.3, grass)
+            d = self.core.evaluate(good(grass=grass, force_cut=False), 0.0)
+            self.assertEqual(d.cutter, 0.0, grass)
+
+    def test_force_cut_no_anula_ninguna_otra_condicion(self):
+        casos = {
+            'sin_pedido': dict(request_cutter=False),
+            'fuera_del_cerco': dict(inside=False),
+            'geofence_sin_dato': dict(inside=None),
+            'estop': dict(estop=True),
+            'volcado': dict(tilt_deg=45.0),
+            'imu_sin_dato': dict(tilt_deg=None),
+            'celda_con_demasiadas_pasadas': dict(passes=5),
+            'pasadas_desconocidas': dict(passes=None),
+            'bumpers_sin_dato': dict(bumpers={}),
+        }
+        for reason, kw in casos.items():
+            d = BladeCore(BladeParams()).evaluate(good(grass=False, force_cut=True, **kw), 0.0)
+            self.assertEqual((d.cutter, d.trimmer) if reason != 'sin_pedido' else (d.cutter,),
+                             (0.0, 0.0) if reason != 'sin_pedido' else (0.0,), reason)
+            self.assertIn(reason, d.reasons['cutter'], reason)
+
+    def test_force_cut_no_anula_el_levantado(self):
+        for pair in ((B3, B4), (B1, B5), (B2, B5)):
+            d = BladeCore(BladeParams()).evaluate(good(grass=False, force_cut=True, bumpers=with_bumpers(*pair)), 0.0)
+            self.assertEqual(d.cutter, 0.0, pair)
+            self.assertIn('levantado', d.reasons['cutter'])
+
+    def test_force_cut_sin_pedido_no_enciende_nada(self):
+        d = BladeCore(BladeParams()).evaluate(good(request_cutter=False, request_trimmer=False, force_cut=True), 0.0)
+        self.assertEqual((d.cutter, d.trimmer), (0.0, 0.0))
+
+    def test_force_cut_no_cambia_al_trimmer(self):
+        a = BladeCore(BladeParams()).evaluate(good(force_cut=False), 0.0)
+        b = BladeCore(BladeParams()).evaluate(good(force_cut=True), 0.0)
+        self.assertEqual((a.trimmer, a.reasons['trimmer']), (b.trimmer, b.reasons['trimmer']))
+
+    def test_force_cut_respeta_el_tope_de_duty(self):
+        d = BladeCore(BladeParams(max_duty_cutter=0.2)).evaluate(good(grass=False, force_cut=True), 0.0)
+        self.assertEqual(d.cutter, 0.2)
+
+    def test_propiedad_force_cut_solo_cambia_el_resultado_por_el_pasto(self):
+        rng = random.Random(9)
+        params = BladeParams(max_passes=3, max_tilt_deg=25.0)
+        for _ in range(5000):
+            kw = dict(request_cutter=rng.random() < 0.8, request_trimmer=rng.random() < 0.8,
+                      inside=rng.choice([True, True, False, None]), grass=rng.choice([True, False, None]),
+                      passes=rng.choice([None, -1, 0, 2, 3, 4]), tilt_deg=rng.choice([None, 0.0, 24.0, 26.0, 90.0]),
+                      bumpers={n: rng.choice([True, False, False, None]) for n in BUMPERS}, estop=rng.random() < 0.1)
+            off = BladeCore(params).evaluate(BladeInputs(force_cut=False, **kw), 0.0)
+            on = BladeCore(params).evaluate(BladeInputs(force_cut=True, **kw), 0.0)
+            self.assertEqual(off.trimmer, on.trimmer)                                      # el trimmer no cambia nunca
+            if on.cutter > 0.0 and off.cutter == 0.0:                                      # lo unico que force_cut agrega
+                self.assertTrue(set(off.reasons['cutter']) <= {'sin_pasto', 'pasto_sin_dato'})
+            self.assertGreaterEqual(on.cutter, off.cutter)
+
+
 class DutyCapTests(unittest.TestCase):
     def test_el_tope_por_defecto_es_conservador(self):
         p = BladeParams()

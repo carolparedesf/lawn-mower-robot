@@ -4,6 +4,8 @@ Cada motor (cuchilla `cutter` y `trimmer`) solo recibe duty > 0 si TODAS estas c
   - fue pedido (enable), - el robot esta dentro del cerco (/geofence/inside), - no esta levantado (bumpers),
   - no esta volcado (IMU), - no hay estop, - la celda tiene menos de `max_passes` pasadas, - todos los datos
   requeridos son recientes, y (solo la cuchilla) - hay pasto (grass_present).
+`force_cut` anula UNICAMENTE la condicion de pasto (tambien si el dato falta); nunca el pedido, el cerco, el
+levantado, el volcado, el estop, las pasadas ni la vigencia de los demas datos.
 Nunca se publica mas que `max_duty` de cada motor.
 """
 import math
@@ -28,7 +30,7 @@ class BladeParams:
 
     max_passes: int = 2                 # la celda debe tener MENOS pasadas que esto
     require_grass: bool = True          # solo la cuchilla
-    max_tilt_deg: float = 30.0          # inclinacion (roll/pitch combinados) que se considera volcado
+    max_tilt_deg: float = 20.0          # inclinacion (roll/pitch combinados) que se considera volcado
     tilt_hold_s: float = 3.0            # tras volcarse, se mantiene apagado este tiempo
     lift_hold_s: float = 3.0            # idem tras detectar levantado (rebote de bumpers)
 
@@ -44,6 +46,7 @@ class BladeInputs:
     tilt_deg: Optional[float] = None
     bumpers: Dict[str, Optional[bool]] = field(default_factory=dict)
     estop: bool = False
+    force_cut: bool = False                      # anula solo la condicion de pasto
 
 
 @dataclass
@@ -119,7 +122,7 @@ class BladeCore:
             reasons['cutter'].append('sin_pedido')
         if not inp.request_trimmer:
             reasons['trimmer'].append('sin_pedido')
-        if p.require_grass:                              # solo la cuchilla
+        if p.require_grass and not inp.force_cut:        # solo la cuchilla; force_cut anula solo esto
             if inp.grass is None:
                 reasons['cutter'].append('pasto_sin_dato')
             elif not inp.grass:

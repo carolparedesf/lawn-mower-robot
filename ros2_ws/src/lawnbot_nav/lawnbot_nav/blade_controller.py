@@ -3,8 +3,11 @@
 
 Esos topics los escucha el nodo cutting_motors (que corta solo a los 0,5 s sin ordenes), por eso se publica a
 10 Hz. Cada motor solo recibe duty > 0 mientras TODAS las condiciones se cumplan (ver blade_logic.py); si falla
-alguna, o un dato esta viejo, se publica 0 de inmediato. Nunca pasa de max_duty. Los pedidos de encendido llegan
-por /cutter/enable y /trimmer/enable (Bool); sin pedido, o al arrancar, esta todo apagado.
+alguna, o un dato esta viejo, se publica 0 de inmediato. Nunca pasa de max_duty.
+
+Los pedidos llegan por /cutter/enable, /trimmer/enable y /blade/force_cut (Bool). El bridge los republica a 2-5 Hz
+mientras la app los mantenga: un `true` vale solo `enable_timeout` (2 s) desde su ultimo refresco, un `false`
+apaga de inmediato, y sin pedidos (o al arrancar) esta todo apagado. force_cut anula SOLO la condicion de pasto.
 """
 import time
 from dataclasses import fields
@@ -28,6 +31,7 @@ class BladeController(Node):
         d('rate_hz', 10.0)
         d('input_timeout', 1.0)        # s: un dato mas viejo que esto cuenta como faltante
         d('imu_timeout', 0.5)
+        d('enable_timeout', 2.0)       # s: un pedido sin refresco por este tiempo vence
         d('cutter_topic', 'cutter/cmd')
         d('trimmer_topic', 'trimmer/cmd')
         d('grass_topic', 'vision/grass_present')
@@ -40,10 +44,9 @@ class BladeController(Node):
         self.core = BladeCore(BladeParams(**{n: gp(n).value for n in names}))
         self.input_timeout = gp('input_timeout').value
         self.imu_timeout = gp('imu_timeout').value
+        self.enable_timeout = gp('enable_timeout').value
 
         self.cache = SensorCache()
-        self.request_cutter = False
-        self.request_trimmer = False
         self.estop = False
         self.last_status = None
         self.last_status_pub = 0.0
@@ -53,8 +56,8 @@ class BladeController(Node):
         self.status_pub = self.create_publisher(String, 'blade/status', 10)
 
         # Pedidos y estop: volatiles a proposito (un reinicio del nodo no debe encender nada)
-        self.create_subscription(Bool, 'cutter/enable', lambda m: setattr(self, 'request_cutter', bool(m.data)), 10)
-        self.create_subscription(Bool, 'trimmer/enable', lambda m: setattr(self, 'request_trimmer', bool(m.data)), 10)
+        for name, topic in (('cutter', 'cutter/enable'), ('trimmer', 'trimmer/enable'), ('force_cut', 'blade/force_cut')):
+            self.create_subscription(Bool, topic, lambda m, n=name: self.stamp(f'req_{n}', m.data), 10)
         self.create_subscription(Bool, 'estop', lambda m: setattr(self, 'estop', bool(m.data)), 10)
         self.create_subscription(Bool, 'geofence/inside', lambda m: self.stamp('inside', m.data), 10)
         self.create_subscription(Bool, gp('grass_topic').value, lambda m: self.stamp('grass', m.data), 10)
@@ -77,8 +80,12 @@ class BladeController(Node):
         q = msg.orientation
         self.cache.set('tilt', tilt_from_quaternion(q.x, q.y, q.z, q.w), time.monotonic())
 
-    def flag(self, name, now):
-        v = self.cache.get(name, now, self.input_timeout)
+    def requested(self, name, now):
+        """Pedido vigente: el ultimo mensaje es true y se refresco dentro de enable_timeout."""
+        return bool(self.flag(f'req_{name}', now, self.enable_timeout))
+
+    def flag(self, name, now, timeout=None):
+        v = self.cache.get(name, now, self.input_timeout if timeout is None else timeout)
         return None if v is None else v > 0.5
 
     # ── Ciclo ────────────────────────────────────────────────
@@ -87,7 +94,8 @@ class BladeController(Node):
         now = time.monotonic()
         passes = self.cache.get('passes', now, self.input_timeout)
         inputs = BladeInputs(
-            request_cutter=self.request_cutter, request_trimmer=self.request_trimmer,
+            request_cutter=self.requested('cutter', now), request_trimmer=self.requested('trimmer', now),
+            force_cut=self.requested('force_cut', now),
             inside=self.flag('inside', now), grass=self.flag('grass', now),
             passes=None if passes is None else int(passes),
             tilt_deg=self.cache.get('tilt', now, self.imu_timeout),
