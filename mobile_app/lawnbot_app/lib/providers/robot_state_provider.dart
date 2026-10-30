@@ -11,7 +11,7 @@ class RobotStateProvider extends ChangeNotifier {
   RobotPosition? _currentPosition;
   RobotStatus _currentStatus = const RobotStatus(
     mode: 'idle',
-    battery: 0,
+    battery: null,
     alert: 'none',
   );
   final List<LatLng> _positionHistory = [];

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../models/robot_status.dart';
 import '../providers/actuator_provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
+import '../widgets/battery_display.dart';
 import '../widgets/actuator_switch_tile.dart';
 import '../widgets/robo_top_bar.dart';
 
@@ -16,25 +16,11 @@ class ActuatorsScreen extends StatelessWidget {
 
   const ActuatorsScreen({super.key, required this.onSettingsTap});
 
-  String _timeRemaining(RobotStatus status) {
-    if (status.charging) return 'Cargando…';
-    final drainRate = (status.blade ? 1 : 0) +
-        (status.trimmer ? 1 : 0) +
-        (status.isAutonomous ? 1 : 0);
-    if (drainRate == 0) return '${(status.battery / 3).round()} h aprox.';
-    final hours = (status.battery / (drainRate * 4)).round();
-    return '${hours < 1 ? 1 : hours} h aprox.';
-  }
-
   @override
   Widget build(BuildContext context) {
     final status = context.watch<RobotStateProvider>().currentStatus;
     final actuator = context.read<ActuatorProvider>();
-    final batteryColor = status.battery <= 20
-        ? RoboColors.error
-        : status.battery <= 45
-            ? RoboColors.amberAccent
-            : RoboColors.primaryGreen;
+    final batteryColor = batteryColorFor(status.battery);
 
     return Column(
       children: [
@@ -142,7 +128,7 @@ class ActuatorsScreen extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          '${status.battery}%',
+                          batteryLabel(status.battery),
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.w800,
@@ -155,26 +141,11 @@ class ActuatorsScreen extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: LinearProgressIndicator(
-                        value: status.battery.clamp(0, 100) / 100,
+                        value: (status.battery ?? 0).clamp(0, 100) / 100,
                         minHeight: 14,
                         backgroundColor: RoboColors.border,
                         color: batteryColor,
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Autonomía estimada',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: RoboColors.textSecondary)),
-                        Text(_timeRemaining(status),
-                            style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: RoboColors.textTertiary)),
-                      ],
                     ),
                     const Divider(height: 24),
                     Row(

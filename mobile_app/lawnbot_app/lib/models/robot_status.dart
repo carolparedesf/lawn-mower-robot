@@ -1,6 +1,8 @@
 class RobotStatus {
   final String mode;
-  final int battery;
+  /// Battery percentage, or null when the robot does not report a valid one
+  /// (the bridge omits the key if the battery sensor is not connected).
+  final int? battery;
   final String alert;
   final bool blade;
   final bool trimmer;
@@ -24,7 +26,7 @@ class RobotStatus {
   factory RobotStatus.fromJson(Map<String, dynamic> json) {
     return RobotStatus(
       mode: json['mode'] as String? ?? 'idle',
-      battery: (json['battery'] as num?)?.toInt() ?? 0,
+      battery: (json['battery'] as num?)?.toInt(),
       alert: json['alert'] as String? ?? 'none',
       blade: json['blade'] as bool? ?? false,
       trimmer: json['trimmer'] as bool? ?? false,
@@ -35,7 +37,7 @@ class RobotStatus {
 
   Map<String, dynamic> toJson() => {
         'mode': mode,
-        'battery': battery,
+        if (battery != null) 'battery': battery,
         'alert': alert,
         'blade': blade,
         'trimmer': trimmer,

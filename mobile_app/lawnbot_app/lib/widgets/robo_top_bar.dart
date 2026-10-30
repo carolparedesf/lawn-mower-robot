@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
+import 'alert_banner.dart';
+import 'battery_display.dart';
 
 /// Replaces the stock AppBar. Logo+title+settings row, then a
 /// connection/battery status row — folds in the old connection_indicator.dart.
@@ -18,11 +20,7 @@ class RoboTopBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     final connection = context.watch<ConnectionProvider>();
     final battery = context.watch<RobotStateProvider>().currentStatus.battery;
-    final batteryColor = battery <= 20
-        ? RoboColors.error
-        : battery <= 45
-            ? RoboColors.amberAccent
-            : RoboColors.primaryGreen;
+    final batteryColor = batteryColorFor(battery);
 
     return Column(
       children: [
@@ -130,7 +128,7 @@ class RoboTopBar extends StatelessWidget implements PreferredSizeWidget {
                     ),
                     child: FractionallySizedBox(
                       alignment: Alignment.centerLeft,
-                      widthFactor: (battery.clamp(0, 100)) / 100,
+                      widthFactor: (battery ?? 0).clamp(0, 100) / 100,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           color: batteryColor,
@@ -141,7 +139,7 @@ class RoboTopBar extends StatelessWidget implements PreferredSizeWidget {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '$battery%',
+                    batteryLabel(battery),
                     style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
@@ -153,6 +151,7 @@ class RoboTopBar extends StatelessWidget implements PreferredSizeWidget {
             ],
           ),
         ),
+        const AlertBanner(),
       ],
     );
   }
