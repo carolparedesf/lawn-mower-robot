@@ -112,6 +112,24 @@ class MarkerArray:
         self.markers = []
 
 
+class Int32:
+    def __init__(self, data=0):
+        self.data = data
+
+
+class PoseArray:
+    def __init__(self):
+        self.header = Header()
+        self.poses = []
+
+
+class Imu:
+    def __init__(self, x=0.0, y=0.0, z=0.0, w=1.0):
+        self.header = Header()
+        self.orientation = Quat()
+        self.orientation.x, self.orientation.y, self.orientation.z, self.orientation.w = x, y, z, w
+
+
 class Range:
     ULTRASOUND = 0
 
@@ -336,15 +354,16 @@ def install():
     _module('rclpy.time', Time=Time)
     _module('geometry_msgs')
     _module('geometry_msgs.msg', Twist=Twist, TransformStamped=TransformStamped,
-            PolygonStamped=PolygonStamped, Point32=Point32, PoseStamped=PoseStamped, Point=Point32)
+            PolygonStamped=PolygonStamped, Point32=Point32, PoseStamped=PoseStamped, Point=Point32,
+            PoseArray=PoseArray)
     _module('visualization_msgs')
     _module('visualization_msgs.msg', Marker=Marker, MarkerArray=MarkerArray)
     _module('nav_msgs')
     _module('nav_msgs.msg', Path=Path)
     _module('sensor_msgs')
-    _module('sensor_msgs.msg', Range=Range)
+    _module('sensor_msgs.msg', Range=Range, Imu=Imu)
     _module('std_msgs')
-    _module('std_msgs.msg', Bool=Bool, String=String, Float32=Float32)
+    _module('std_msgs.msg', Bool=Bool, String=String, Float32=Float32, Int32=Int32)
     _module('tf2_ros', Buffer=Buffer, TransformException=TransformException,
             TransformListener=lambda b, n: None, TransformBroadcaster=Broadcaster)
     _module('robot_localization')

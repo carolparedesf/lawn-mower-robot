@@ -554,10 +554,6 @@ def run_random_and_perimeter():
         r = robot_node.robot
         xy.append((r.x, r.y))
         st['min_gap'] = min(st['min_gap'], robot_node.world.distance((r.x, r.y)))
-        if os.environ.get('DEBUG6') and int(t * 50) % 250 == 0:
-            g = gate.pubs['cmd_vel'].last
-            print(f'   t={t - 1000:7.1f} pos=({r.x:.2f},{r.y:.2f},{r.yaw:.2f}) pm={pm.core.state:13s} mode={pm.active_mode} gate=({g.linear.x:.2f},{g.angular.z:.2f}) '
-                  f'alert={gate.pubs["nav/safety_alert"].last.data if gate.pubs.get("nav/safety_alert") and gate.pubs["nav/safety_alert"].last else None}')
 
     def run(seconds):
         for _ in range(int(seconds / 0.02)):
@@ -715,6 +711,175 @@ def _twist(v, w):
     return t
 
 
+def run_blade():
+    print('\n[8] blade_controller + coverage_map + fake_robot: /cutter/cmd pasa a 0 en cada condicion (sin motores)')
+    import yaml
+    from lawnbot_nav.blade_controller import BladeController
+    from lawnbot_nav.coverage_map import CoverageMap
+    from lawnbot_nav.fake_robot import FakeRobot
+    from lawnbot_nav.geofence_logic import signed_distance
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
+    fence = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]
+    robot_node = make(FakeRobot, frame_id='map', cmd_topic='cmd_vel', x=1.0, y=3.0, yaw=0.0, tau=0.0)
+    cm = make(CoverageMap, **load('coverage_map.yaml', 'coverage_map'))
+    bl = make(BladeController, **load('blade_controller.yaml', 'blade_controller'))
+    fake_tick, cm_tick, bl_tick = robot_node.timer(0.02), cm.timer(0.1), bl.timer(0.1)
+    drive = robot_node.subs['cmd_vel']
+    S = {'inside': None, 'grass': True, 'imu': (0.0, 0.0, 0.0, 1.0), 'estop': False,
+         'bumpers': {n: False for n in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left',
+                                         'bumper/B4_right', 'bumper/B5_back')},
+         'speed': 0.0, 'mute': set(), 'next': R.MONO['t'], 'inside_force': None}
+    sent = {'cutter': 0, 'trimmer': 0, 'passes': 0}
+    max_cutter = [0.0]
+    motor = {'duty': 0.0, 'last': -1e9}                    # modelo de cutting_motors (sin hardware): watchdog de 0,5 s
+
+    def publish_inputs():
+        r = robot_node.robot
+        inside = (signed_distance((r.x, r.y), fence) >= 0) if S['inside_force'] is None else S['inside_force']
+        feeds = {'inside': lambda: bl.subs['geofence/inside'](R.Bool(inside)),
+                 'grass': lambda: bl.subs['vision/grass_present'](R.Bool(S['grass'])),
+                 'imu': lambda: bl.subs['imu/data'](R.Imu(*S['imu']))}
+        for k, fn in feeds.items():
+            if k not in S['mute']:
+                fn()
+        for name, value in S['bumpers'].items():
+            if name not in S['mute']:
+                bl.subs[name](R.Bool(value))
+        bl.subs['estop'](R.Bool(S['estop']))
+
+    def step(dt=0.02):
+        R.advance(dt)
+        t = R.MONO['t']
+        if S['speed']:
+            m = R.Twist()
+            m.linear.x = S['speed']
+            drive(m)
+        fake_tick()
+        if t >= S['next']:                                  # los nodos y las entradas corren a 10 Hz
+            S['next'] += 0.1
+            publish_inputs()
+            cm_tick()
+            for m in cm.pubs['coverage/cell_passes'].sent[sent['passes']:]:
+                if 'passes' not in S['mute']:
+                    bl.subs['coverage/cell_passes'](m)
+            sent['passes'] = len(cm.pubs['coverage/cell_passes'].sent)
+            bl_tick()
+            for m in bl.pubs['cutter/cmd'].sent[sent['cutter']:]:
+                cm.subs['cutter/cmd'](m)
+                max_cutter[0] = max(max_cutter[0], m.data)
+                motor['duty'], motor['last'] = m.data, t
+            sent['cutter'] = len(bl.pubs['cutter/cmd'].sent)
+
+    def run(seconds):
+        for _ in range(int(round(seconds / 0.02))):
+            step()
+
+    cutter = lambda: bl.pubs['cutter/cmd'].last.data     # noqa: E731
+    trimmer = lambda: bl.pubs['trimmer/cmd'].last.data   # noqa: E731
+    reasons = lambda m: bl.pubs['blade/status'].last.data   # noqa: E731
+    status = lambda: bl.pubs['blade/status'].last.data   # noqa: E731
+
+    cm.subs['geofence/polygon'](_polygon(fence))
+    run(2.0)
+    check(cutter() == 0.0 and trimmer() == 0.0 and 'sin_pedido' in status(), 'sin pedido: todo en 0 (y se publica el 0 a 10 Hz)')
+    bl.subs['cutter/enable'](R.Bool(True))
+    bl.subs['trimmer/enable'](R.Bool(True))
+    run(1.0)
+    check(cutter() == 0.3 and trimmer() == 0.3, f'pedido y todo en orden: cuchilla {cutter()} y trimmer {trimmer()} (tope 0,30)')
+    check(motor['duty'] == 0.3, '   el modelo de cutting_motors recibe 0,30')
+
+    def trips(text, setup, undo, both=True, expect=None, hold=0.0):
+        setup()
+        run(0.25)                                            # un par de ciclos de 10 Hz
+        ok = cutter() == 0.0 and (not both or trimmer() == 0.0)
+        check(ok and (expect is None or expect in status()), f'{text} -> /cutter/cmd = 0' + (' y /trimmer/cmd = 0' if both else '') + f'   [{status()}]')
+        undo()
+        run(0.3 + hold)
+        check(cutter() == 0.3, '   y al resolverse vuelve a encender')
+
+    # ── una por una, las condiciones ──
+    trips('sin pedido de la cuchilla', lambda: bl.subs['cutter/enable'](R.Bool(False)), lambda: bl.subs['cutter/enable'](R.Bool(True)), both=False)
+    def inside_off():
+        S['inside_force'] = False
+    def inside_on():
+        S['inside_force'] = None
+    trips('fuera del cerco', inside_off, inside_on, expect='fuera_del_cerco')
+    def grass_off():
+        S['grass'] = False
+    def grass_on():
+        S['grass'] = True
+    S['grass'] = False
+    run(0.25)
+    check(cutter() == 0.0 and trimmer() == 0.3, 'sin pasto: la cuchilla en 0 pero el trimmer sigue (el pasto solo afecta a la cuchilla)')
+    S['grass'] = True
+    run(0.3)
+    for a, b in (('bumper/B3_left', 'bumper/B4_right'), ('bumper/B1_front_left', 'bumper/B5_back'), ('bumper/B2_front_right', 'bumper/B5_back')):
+        def lift(a=a, b=b):
+            S['bumpers'][a] = S['bumpers'][b] = True
+        def drop(a=a, b=b):
+            S['bumpers'][a] = S['bumpers'][b] = False
+        trips(f'levantado ({a[7:9]} + {b[7:9]})', lift, drop, expect='levantado', hold=3.0)
+    S['bumpers']['bumper/B1_front_left'] = True
+    S['bumpers']['bumper/B3_left'] = True
+    run(0.3)
+    check(cutter() == 0.3, 'dos bumpers que no son un par de levantado (B1 + B3): sigue cortando')
+    S['bumpers']['bumper/B1_front_left'] = S['bumpers']['bumper/B3_left'] = False
+    def tilt():
+        S['imu'] = (0.4067, 0.0, 0.0, 0.9135)               # roll de 48 grados
+    def level():
+        S['imu'] = (0.0, 0.0, 0.0, 1.0)
+    trips('volcado (roll de 48 grados)', tilt, level, expect='volcado', hold=3.0)
+    def estop_on():
+        S['estop'] = True
+    def estop_off():
+        S['estop'] = False
+    trips('estop', estop_on, estop_off, expect='estop')
+
+    # ── datos viejos: cada entrada requerida que deja de llegar ──
+    for key, what in (('inside', '/geofence/inside'), ('grass', '/vision/grass_present'), ('imu', '/imu/data'),
+                      ('bumper/B5_back', 'un bumper'), ('passes', '/coverage/cell_passes')):
+        S['mute'].add(key)
+        t0 = R.MONO['t']
+        while cutter() != 0.0 and R.MONO['t'] - t0 < 3.0:
+            run(0.1)
+        waited = R.MONO['t'] - t0
+        both = key != 'grass'
+        check(cutter() == 0.0 and (trimmer() == 0.0 or not both) and waited <= 1.3,
+              f'dato viejo ({what}): /cutter/cmd = 0 a los {waited:.1f} s [{status()}]')
+        S['mute'].discard(key)
+        run(0.6)
+        check(cutter() == 0.3, '   y vuelve al reanudarse el dato')
+
+    # ── pasadas por celda: la tercera pasada por la misma linea ya no corta ──
+    R.advance(0.0)
+    robot_node.robot.x, robot_node.robot.y = 1.0, 3.0
+    run(0.5)
+    outcomes, third_status = [], set()
+    for k in range(3):
+        S['speed'] = 0.5 if k % 2 == 0 else -0.5
+        start = R.MONO['t']
+        while (robot_node.robot.x < 8.0 if k % 2 == 0 else robot_node.robot.x > 2.0) and R.MONO['t'] - start < 30:
+            run(0.1)
+            if 4.0 < robot_node.robot.x < 6.0:
+                outcomes.append((k, cutter()))
+                if k == 2:
+                    third_status.add(status())
+        S['speed'] = 0.0
+        run(0.5)
+    by_pass = {k: {c for kk, c in outcomes if kk == k} for k in range(3)}
+    check(by_pass[0] == {0.3} and by_pass[1] == {0.3}, 'primera y segunda pasada por la linea: corta (celdas con 0 y 1 pasadas)')
+    check(by_pass[2] == {0.0} and all('celda_con_demasiadas_pasadas' in t for t in third_status),
+          f'tercera pasada: no corta (2 pasadas completadas) [{sorted(third_status)[0]}]')
+    check(max_cutter[0] <= 0.30 + 1e-12, 'en todo el escenario ningun duty supero el tope de 0,30')
+
+    # ── el modelo del motor: el watchdog de 0,5 s ya lo apagaria, pero no se depende de el ──
+    bl.shutdown_cleanup()
+    check(all(m.data == 0.0 for m in bl.pubs['cutter/cmd'].sent[-5:] + bl.pubs['trimmer/cmd'].sent[-5:]), 'shutdown: ambos motores en 0')
+    cm.shutdown_cleanup()
+    check(cm.pubs['coverage/cell_passes'].last.data == -1, 'shutdown de coverage_map: pasadas desconocidas (-1)')
+
+
 FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
 L_SHAPE = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)]
 
@@ -739,4 +904,5 @@ if __name__ == '__main__':
     run_coverage()
     run_random_and_perimeter()
     run_gate_perimeter()
+    run_blade()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
