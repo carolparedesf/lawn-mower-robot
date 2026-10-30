@@ -20,6 +20,7 @@ La navegacion automatica ya no vive aqui: la resuelven mode_manager / twist_mux 
 """
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -27,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # actuator_rela
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from geometry_msgs.msg import Twist
@@ -293,21 +295,33 @@ class RobotBridge(Node):
             time.sleep(1)
 
 
+def _raise_interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
-    rclpy.init()
+    # Sin el manejador de senales de rclpy: asi, al recibir SIGTERM (systemd) o Ctrl+C, el contexto sigue valido
+    # y se alcanzan a publicar las ordenes de apagado antes de cerrar.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGTERM, _raise_interrupt)
     bridge = RobotBridge()
     try:
         rclpy.spin(bridge)
     except (KeyboardInterrupt, ExternalShutdownException):
-        pass          # Ctrl+C o SIGTERM de systemd: apagado normal
+        pass
     finally:
-        bridge.requested_mode = "idle"
-        bridge.relay.clear()
-        bridge.publish_enables()
-        bridge.send_stop()
-        bridge.publish_mode()
+        try:
+            bridge.requested_mode = "idle"
+            bridge.relay.clear()
+            for _ in range(3):                  # cuchilla/trimmer apagados, parada y modo idle
+                bridge.publish_enables()
+                bridge.send_stop()
+                bridge.publish_mode()
+                time.sleep(0.02)
+        except Exception:
+            pass
         bridge.destroy_node()
-        rclpy.try_shutdown()      # el contexto ya puede estar cerrado por la senal
+        rclpy.try_shutdown()
 
 if __name__ == "__main__":
     main()
