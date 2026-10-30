@@ -1,0 +1,21 @@
+# Cuarto de 10 m x 8 m con un obstaculo circular y un bloque, para probar random_walk y perimeter con fake_robot.
+# Uso: ros2 launch lawnbot_nav sim_world.launch.py   (NO correr ekf_local ni la odometria real a la vez)
+fake_robot:
+  ros__parameters:
+    frame_id: map
+    cmd_topic: cmd_vel             # pasa por twist_mux y safety_gate (nav.launch.py)
+    publish_sensors: true
+    sensor_rate_hz: 5.0
+    side_sonar_yaw_deg: 45.0       # sonares laterales a +-45 grados (el URDF los pone al frente)
+    x: 2.0
+    y: 1.0
+    yaw: 0.0
+    walls: [0.0, 0.0, 10.0, 0.0,
+            10.0, 0.0, 10.0, 8.0,
+            10.0, 8.0, 0.0, 8.0,
+            0.0, 8.0, 0.0, 0.0,
+            4.0, 3.0, 7.0, 3.0,
+            7.0, 3.0, 7.0, 5.0,
+            7.0, 5.0, 4.0, 5.0,
+            4.0, 5.0, 4.0, 3.0]
+    obstacles: [2.0, 6.0, 0.5]

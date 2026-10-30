@@ -254,7 +254,7 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
 El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
 `/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
-`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
 El bridge la manda como `alert` en `robot/status`.
 
 ## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
@@ -303,6 +303,69 @@ ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map  # seguidor en f
    y mirar `/coverage/status` y `/coverage/markers` en RViz (`Fixed Frame: map`). Con un cerco en L debe dar `ERROR:poligono no convexo`.
 4. **Resultado en simulación** (cerco de 6 m × 5 m, `margin` 1,0 m): 13 líneas, 58,9 m; el seguidor lo completa en ~6,5 min cubriendo el
    **100 %** de la región de trabajo (99,6 % con 6 cm de ruido de posición) y sin acercarse al borde del cerco a menos de 0,85 m.
+
+## Bloque C: caminata aleatoria y seguimiento de borde
+
+Los dos publican en su propio topic (`/cmd_vel_random`, `/cmd_vel_perimeter`, entradas de `twist_mux`) y pasan por el `safety_gate`: ninguno
+publica en `/cmd_vel`. Solo actúan con su modo activo (`auto_random` / `auto_perimeter`, vía `/nav/active_mode`; sin mensaje de modo en 3 s se
+consideran inactivos), publican a 20 Hz, publican cero al desactivarse y al apagarse, y no hacen nada fuera de su modo. `nav.launch.py` los
+lanza y apaga los stubs viejos (`use_random_stub` / `use_perimeter_stub` en `false` por defecto: encenderlos junto al nodo real daría dos
+publicadores en el mismo topic). Velocidades máximas: 0,2 m/s (random) y 0,15 m/s (perimeter).
+
+### random_walk (`config/random_walk.yaml`)
+
+AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIRAR un ángulo al azar → AVANZAR.
+
+| Disparo | Condición |
+|---|---|
+| obstáculo | mínimo de los sonares < `obstacle_distance` (0,50 m) |
+| bumper | B1, B2, B3 o B4 presionados (B5 corta el retroceso) |
+| borde | `/geofence/distance_to_edge` < `edge_distance` (1,5 m) **y** se está acercando, o < `edge_hard_distance` (0,5 m) |
+
+- **Semilla configurable** (`seed`; `-1` = al azar): misma semilla y mismas entradas, misma secuencia de giros.
+- **Giros por tiempo** (sin realimentación de rumbo): entre 60° y 180° tras un obstáculo y entre 120° y 180° tras el borde, para alejarse.
+- **Falla segura:** con un sensor requerido sin datos (sonares habilitados o B1/B2) por más de `sensor_timeout`, o sin `/geofence/status` `OK` y
+  distancia vigente (`require_geofence: true`), **no se mueve** y avisa (`random:sensor_timeout`, `random:geofence_not_ready`). Con `edge_distance`
+  se puede arrancar dentro de la franja del borde: solo dispara si se acerca, así sale hacia adentro en vez de retroceder en bucle.
+- Atrapado (6 disparos en 30 s): alerta `random_blocked`.
+- **Límite conocido:** del borde solo se conoce una distancia (no la dirección), así que en una esquina del cerco puede rebotar entre dos bordes un rato.
+
+### perimeter (`config/perimeter.yaml`)
+
+Sigue una pared o borde físico (`side: right|left`) con el sonar y el bumper de ese lado (B4 / B3).
+
+- **Control:** la distancia lateral es `lectura × sin(side_sonar_angle_deg)` y un control proporcional la mantiene en `target_distance` (0,30 m).
+  El bumper lateral es contacto: al tocar, **retrocede derecho** y luego se aleja girando (girar pegado a la pared barre la cola del robot contra ella).
+- **Esquina interior** (sonar central < 0,45 m o bumper frontal): gira en el lugar hacia el lado contrario de la pared hasta liberar el frente.
+- **Esquina exterior** (la pared termina): sigue derecho el tiempo que adelanta el sonar y luego rodea con un arco hacia la pared.
+- **Pared perdida:** búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s); si no la reencuentra se detiene y avisa
+  `perimeter_lost`. Otros fallos: `perimeter_blocked` (contacto continuo > 6 s o frente que no se libera) y `perimeter_misconfigured`.
+- **`use_side_sonar: false`:** solo contacto con el bumper lateral. Es un respaldo: el diferencial gira sobre su eje y, pegado a la pared, puede
+  trabarse; en ese caso lo declara (`perimeter_blocked`) en vez de empujar para siempre.
+- **IMPORTANTE (a medir en el robot):** en el URDF los tres sonares miran al frente (`rpy 0`). Para medir la distancia a una pared que corre al
+  costado hace falta el **ángulo real de montaje del sonar lateral**: `side_sonar_angle_deg` (45° provisorio; 90° si miran de costado). Con menos de
+  20° el nodo se niega a arrancar (`perimeter_misconfigured`).
+- **Interacción con el gate:** el gate frena el avance con cualquier sonar (mínimo de los tres) por debajo de 0,30 m y lo prohíbe por debajo de 0,15 m.
+  Con el sonar lateral a 45° y la pared a 0,30 m la lectura es de 0,42 m; no se puede seguir una pared más cerca de ~0,21 m sin que el gate frene.
+
+### Pruebas
+
+1. Sin ROS: `PYTHONPATH=. python3 test/test_sim_world.py test/test_random_walk.py test/test_perimeter.py` (uno por vez). `sim_world.py` es un cuarto simulado
+   con paredes y obstáculos circulares, sonares (cono de ±7,5°), bumpers por zona del cuerpo y colisiones.
+2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [6]: `fake_robot` en un cuarto, los nodos y el `safety_gate` encadenados).
+3. Con ROS y `fake_robot` en un cuarto con paredes y obstáculos:
+   ```bash
+   ros2 launch lawnbot_nav nav.launch.py
+   ros2 launch lawnbot_nav sim_world.launch.py          # fake_robot + sonares y bumpers simulados (config/sim_room.yaml)
+   ros2 topic pub -r 1 /robot_mode std_msgs/msg/String "{data: 'auto_random'}" --qos-durability transient_local --qos-reliability reliable
+   ros2 topic hz /cmd_vel_random ; ros2 topic echo /cmd_vel
+   ```
+   Para `auto_random` hace falta `/geofence/status` `OK` (un cerco en `map`, ver Bloque A); sin él el robot no se mueve y `/nav/safety_alert` marca
+   `geofence_not_ready`. Para `auto_perimeter`, `'auto_perimeter'` (en `sim_room.yaml` los sonares laterales están a ±45°). Cambiar de modo apaga
+   el nodo anterior con ceros. **No correr `ekf_local` ni la odometría real a la vez que `fake_robot`.**
+4. **Resultado en simulación** (cuarto de 10 m × 8 m con un bloque y un obstáculo): `random_walk` recorre ~20 celdas de 1 m en 5 min sin tocar nada
+   y sin salir del cerco; `perimeter` da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque (esquinas exteriores) manteniendo
+   ~0,3 m, y con la pared fuera de alcance se rinde a los 25 s con `perimeter_lost`.
 
 ## Pendientes
 
