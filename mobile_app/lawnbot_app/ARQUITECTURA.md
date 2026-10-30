@@ -150,7 +150,7 @@ Contiene la lista de puntos y la validación mínima de 3 vértices:
 ```dart
 class Geofence {
   final List<LatLng> points;
-  bool get isValid => points.length >= 3;
+  bool get isValid => problem == null; // >= 4 puntos, simple y convexo
 
   Map<String, dynamic> toJson() => {
     'points': points.map((p) => {'lat': p.latitude, 'lng': p.longitude}).toList(),
@@ -317,7 +317,7 @@ Esto previene que la UI modifique la lista directamente, lo que rompería el pat
 Responsabilidades:
 - Mantener la lista de puntos del polígono en construcción
 - Exponer operaciones: `addPoint`, `undo`, `clear`, `sendGeofence`
-- Validar antes de enviar (mínimo 3 puntos)
+- Validar antes de enviar (mínimo 4 puntos, polígono simple y convexo)
 
 #### `sendGeofence()`
 
@@ -566,13 +566,13 @@ Toolbar compacta que aparece en la parte inferior del mapa cuando el modo geofen
 |---|---|---|
 | Undo | `GeofenceProvider.undo()` | Hay al menos 1 punto |
 | Clear | `GeofenceProvider.clear()` | Hay al menos 1 punto |
-| Send | `GeofenceProvider.sendGeofence()` | Hay al menos 3 puntos |
+| Send | `GeofenceProvider.sendGeofence()` | Hay al menos 4 puntos y el polígono es simple y convexo |
 
 El botón Send muestra un `SnackBar` confirmando el resultado:
 ```dart
 final ok = geofence.sendGeofence();
 ScaffoldMessenger.of(context).showSnackBar(
-  SnackBar(content: Text(ok ? 'Geofence enviado' : 'Mínimo 3 puntos'))
+  SnackBar(content: Text(ok ? 'Geofence enviado' : '<motivo del problema>'))
 );
 ```
 
@@ -684,7 +684,7 @@ MapScreen reconstruye PolygonLayer y MarkerLayer con los nuevos puntos
     │
     ▼
 GeofenceProvider.sendGeofence()
-    │  valida >= 3 puntos
+    │  valida >= 4 puntos, simple y convexo
     │  serializa a JSON
     │  MqttService.publish(topicCmdGeofence, payload, QoS 1)
     ▼

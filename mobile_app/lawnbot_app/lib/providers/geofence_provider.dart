@@ -10,7 +10,10 @@ class GeofenceProvider extends ChangeNotifier {
   final List<LatLng> _points = [];
 
   List<LatLng> get points => List.unmodifiable(_points);
-  bool get canSend => _points.length >= 3;
+
+  /// Why the current polygon cannot be sent, or null if it can.
+  GeofenceProblem? get problem => Geofence(points: _points).problem;
+  bool get canSend => problem == null;
 
   void addPoint(LatLng point) {
     _points.add(point);

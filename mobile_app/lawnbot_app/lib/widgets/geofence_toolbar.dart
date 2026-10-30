@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/geofence_provider.dart';
+import 'geofence_notices.dart';
 import '../theme/robo_theme.dart';
 
 class GeofenceToolbar extends StatelessWidget {
@@ -57,12 +58,13 @@ class GeofenceToolbar extends StatelessWidget {
             iconColor: Colors.white,
             onTap: geofence.canSend
                 ? () {
+                    final problem = geofence.problem;
                     final ok = geofence.sendGeofence();
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(ok
                             ? 'Geofence enviado al robot'
-                            : 'Mínimo 3 puntos requeridos'),
+                            : geofenceProblemMessage(problem!)),
                         duration: const Duration(seconds: 2),
                       ),
                     );
