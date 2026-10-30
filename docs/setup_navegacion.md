@@ -484,6 +484,7 @@ Nodo `potential_field` (`config/potential_field.yaml`, arranca con `nav.launch.p
   `vision_stub` ya publica ese topic vacío, así que el contrato existe aunque no haya cámara. Lecturas sin eco (>= `sonar_max_range` − 0,05) no son obstáculo.
 - **Mínimo local:** con obstáculos dentro de `influence_distance` y orden de avanzar, si el robot no se mueve `stall_min_progress` (0,20 m) en `stall_window_s` (6 s) avisa **`potential_field:local_minimum`** por `/nav/alert_in`
   (llega a la app en `alert`) y **cede el control** `yield_s` (4 s) para que el algoritmo de abajo (p. ej. el retroceso de `random_walk`) resuelva. El progreso se mide con la TF `odom` -> `base_footprint`; sin ella no se detecta y se avisa en el log.
+- **Solo publica movimiento con el modo y la orden vigentes:** nada en `auto_perimeter`, `manual`, `idle`, `stop` ni modos desconocidos (a lo sumo ceros al salir de un modo), y deja de publicar si la orden del algoritmo que usa como entrada tiene más de 0,5 s (`nominal_timeout`) o si `/nav/active_mode` tiene más de 3 s. Escenario [12].
 - Pruebas sin ROS: `PYTHONPATH=. python3 test/test_potential_field.py` y el escenario [11] de `tools/node_scenarios.py` (random_walk + potential_field + mux + gate con `fake_robot` y obstáculos; robot trabado para el mínimo local).
   Con ROS: `ros2 launch lawnbot_nav sim_world.launch.py`, activar el nodo y pedir `auto_random`.
 

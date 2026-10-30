@@ -1363,6 +1363,82 @@ def run_potential_field():
     check(all(m.linear.x == 0 and m.angular.z == 0 for m in pf.pubs['cmd_vel_potential_field'].sent[-5:]), 'shutdown: publica cero')
 
 
+def run_pf_gating():
+    print('\n[12] potential_field: solo publica en auto_parallel / auto_random y con la orden del algoritmo vigente (< 0,5 s)')
+    import yaml
+    from lawnbot_nav.potential_field import PotentialField
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'potential_field.yaml')))['potential_field']['ros__parameters']
+    pf = make(PotentialField, **dict(cfg, enabled=True))
+    tick = pf.timer(0.05)
+    pub = pf.pubs['cmd_vel_potential_field']
+    topics = {'auto_parallel': 'cmd_vel_waypoint', 'auto_random': 'cmd_vel_random'}
+
+    def feed(mode, nominal_topic=None, sonars=True):
+        pf.subs['nav/active_mode'](R.String(mode))
+        if sonars:
+            for s_ in ('left', 'center', 'right'):
+                pf.subs[f'sonar/{s_}'](R.Range(0.4))
+        if nominal_topic:
+            pf.subs[nominal_topic](_twist(0.3, 0.0))
+
+    def sent_during(mode, seconds=2.0, nominal=True):
+        n0 = len(pub.sent)
+        for _ in range(int(seconds / 0.05)):
+            R.advance(0.05)
+            feed(mode, topics.get('auto_parallel') if nominal else None)
+            if nominal:
+                pf.subs['cmd_vel_random'](_twist(0.3, 0.0))
+            tick()
+        return [m for m in pub.sent[n0:] if m.linear.x != 0 or m.angular.z != 0]
+
+    for mode in ('auto_perimeter', 'manual', 'idle', 'stop', 'auto_inventado', ''):
+        check(sent_during(mode) == [], f'modo {mode!r} con orden de algoritmo y obstaculos: no publica ninguna orden de movimiento')
+    check(len(sent_during('auto_parallel')) > 0, 'auto_parallel: publica')
+    check(len(sent_during('auto_random')) > 0, 'auto_random: publica')
+    sent_during('auto_perimeter')
+    n = len(pub.sent)
+    sent_during('auto_perimeter', 3.0)
+    check(all(m.linear.x == 0 and m.angular.z == 0 for m in pub.sent[n:]), 'auto_perimeter: a lo sumo ceros, nunca movimiento')
+
+    # orden del algoritmo vieja (> 0,5 s): deja de publicar
+    for mode in ('auto_parallel', 'auto_random'):
+        topic = topics[mode]
+        pf.subs['nav/active_mode'](R.String(mode))
+        for _ in range(10):
+            R.advance(0.05)
+            feed(mode, topic)
+            tick()
+        check(pub.last.linear.x > 0, f'{mode}: con la orden vigente publica')
+        n = len(pub.sent)
+        for _ in range(8):                       # 0,4 s sin orden nueva: todavia vigente
+            R.advance(0.05)
+            feed(mode)
+            tick()
+        check(len(pub.sent) > n, '   a los 0,4 s sin orden nueva todavia publica')
+        n = len(pub.sent)
+        for _ in range(40):                      # 2 s mas sin orden nueva
+            R.advance(0.05)
+            feed(mode)
+            tick()
+        late = pub.sent[n + 4:]
+        check(late == [], f'{mode}: con la orden del algoritmo de mas de 0,5 s deja de publicar')
+        feed(mode, topic)
+        R.advance(0.05)
+        tick()
+        check(pub.sent[-1] is not late and len(pub.sent) > n, '   y retoma cuando la orden vuelve')
+
+    # el heartbeat del modo vencido (> 3 s) tambien lo calla
+    n = len(pub.sent)
+    for _ in range(100):
+        R.advance(0.05)
+        for s_ in ('left', 'center', 'right'):
+            pf.subs[f'sonar/{s_}'](R.Range(0.4))
+        pf.subs['cmd_vel_random'](_twist(0.3, 0.0))
+        tick()
+    tail = [m for m in pub.sent[n + 70:] if m.linear.x != 0 or m.angular.z != 0]
+    check(tail == [], 'sin /nav/active_mode reciente (> 3 s) no publica movimiento')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1451,4 +1527,5 @@ if __name__ == '__main__':
     run_bridge_actuators()
     run_events()
     run_potential_field()
+    run_pf_gating()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
