@@ -1,0 +1,8 @@
+# Nombres fijos para los puertos serie USB de la Raspberry Pi del robot.
+# Instalar en la Pi: ver docs/setup_usb.md
+#
+# ESP32 (micro-ROS): CH340, 1a86:7523 -> /dev/esp32
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="esp32"
+
+# TF-Mini Plus: adaptador CP2102, 10c4:ea60 -> /dev/tfmini
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="tfmini"
