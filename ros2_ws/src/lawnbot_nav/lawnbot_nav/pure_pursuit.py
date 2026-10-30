@@ -40,6 +40,10 @@ class FollowerParams:
     progress_distance_eps: float = 0.03  # [m] de acercamiento que cuenta como avance
     progress_heading_eps: float = 0.03   # [rad] de reduccion de error de rumbo que cuenta como avance
     tf_abort_s: float = 3.0              # sin pose por mas de esto -> ERROR
+    # Tolerancia efectiva de la ruta: min(goal_tolerance, ratio * tramo mas corto). Evita saltar
+    # la vuelta entre lineas de cobertura cuando el espaciado es parecido a la tolerancia.
+    route_tolerance_ratio: float = 0.4
+    min_route_tolerance: float = 0.05
 
 
 def wrap_pi(a: float) -> float:
@@ -59,6 +63,8 @@ class WaypointFollowerCore:
         # estop o modo, y se vuelve a armar con un False.
         self.armed = True
         self.wps: List[Tuple[float, float]] = []
+        self.route = None            # ruta absoluta recibida por topic (reemplaza a p.waypoints)
+        self.tol = params.goal_tolerance
         self.k = 0
         self.laps = 0
         self.seg_start = (0.0, 0.0)
@@ -74,7 +80,7 @@ class WaypointFollowerCore:
             return 'enable ignorado: publicar false y luego true para volver a habilitar'
         if self.state == RUNNING:
             return 'ya estaba en RUNNING (sin cambios)'
-        if not self.p.waypoints:
+        if not self.p.waypoints and not self.route:
             return 'sin waypoints configurados'
         if self.state == PAUSED:
             self.state = RUNNING
@@ -84,6 +90,7 @@ class WaypointFollowerCore:
             return 'reanudado'
         # IDLE, DONE o ERROR: corrida nueva
         self._anchor(pose)
+        self.tol = self._effective_tolerance()
         self.k = 0
         self.laps = 0
         self.seg_start = (pose.x, pose.y)
@@ -100,6 +107,38 @@ class WaypointFollowerCore:
         if self.state == RUNNING:
             self.state = PAUSED
             self.reason = 'enable=false'
+
+    def rearm(self) -> None:
+        """Vuelve a aceptar `enable` (p. ej. al elegir de nuevo un modo automatico)."""
+        self.armed = True
+
+    def set_route(self, points) -> str:
+        """Carga una ruta absoluta (en el frame del seguidor). Rechazada si esta en RUNNING."""
+        if self.state == RUNNING:
+            return 'ruta rechazada: el seguidor esta en RUNNING'
+        pts = []
+        for pt in points:
+            if not pts or math.dist(pts[-1], pt) > 1e-6:
+                pts.append((float(pt[0]), float(pt[1])))
+        if not pts:
+            self.clear_route()
+            return 'ruta vacia: borrada'
+        self.route = pts
+        self.wps = list(pts)
+        self.tol = self._effective_tolerance()
+        self.k = 0
+        self.state = IDLE
+        self.reason = ''
+        return f'ruta cargada: {len(pts)} puntos, tolerancia efectiva {self.tol:.3f} m'
+
+    def clear_route(self) -> None:
+        """Borra la ruta recibida; si estaba navegando pasa a IDLE (el nodo publica cero)."""
+        self.route = None
+        self.wps = []
+        self.k = 0
+        self.tol = self.p.goal_tolerance
+        self.state = IDLE
+        self.reason = ''
 
     def pause(self, reason: str) -> None:
         """Pausa externa (manual, estop, modo): exige false y luego true para reanudar."""
@@ -133,7 +172,7 @@ class WaypointFollowerCore:
         # Avanzar de waypoint al entrar en la tolerancia
         for _ in range(len(self.wps) + 1):
             goal = self.wps[self.k]
-            if math.dist(pos, goal) >= p.goal_tolerance:
+            if math.dist(pos, goal) >= self.tol:
                 break
             self.seg_start = goal
             self.k += 1
@@ -191,18 +230,31 @@ class WaypointFollowerCore:
             v = w = 0.0
 
         self.info = {'k': self.k, 'n': len(self.wps), 'dist': d_goal, 'alpha': alpha,
-                     'v': v, 'w': w, 'phase': phase}
+                     'v': v, 'w': w, 'phase': phase, 'tol': self.tol}
         return v, w
 
     # ── Internos ─────────────────────────────────────────────
 
     def _anchor(self, pose: Pose) -> None:
-        if self.p.relative_to_start:
+        if self.route is not None:          # las rutas por topic siempre son absolutas
+            self.wps = list(self.route)
+        elif self.p.relative_to_start:
             c, s = math.cos(pose.yaw), math.sin(pose.yaw)
             self.wps = [(pose.x + c * x - s * y, pose.y + s * x + c * y)
                         for x, y in self.p.waypoints]
         else:
             self.wps = list(self.p.waypoints)
+
+    def _effective_tolerance(self) -> float:
+        wps = self.wps
+        legs = [math.dist(a, b) for a, b in zip(wps, wps[1:])]
+        if self.p.loop and len(wps) > 1:
+            legs.append(math.dist(wps[-1], wps[0]))
+        legs = [d for d in legs if d > 1e-6]
+        if not legs:
+            return self.p.goal_tolerance
+        return min(self.p.goal_tolerance,
+                   max(self.p.min_route_tolerance, self.p.route_tolerance_ratio * min(legs)))
 
     def _lookahead_point(self, pos, goal):
         a = self.seg_start

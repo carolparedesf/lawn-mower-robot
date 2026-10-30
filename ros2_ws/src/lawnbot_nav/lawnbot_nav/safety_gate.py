@@ -15,7 +15,7 @@ from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
 from lawnbot_nav.safety_logic import (SafetyParams, SafetyState,
-                                      apply_safety)
+                                      apply_safety, merge_alerts, parse_alert_in)
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -34,6 +34,7 @@ class SafetyGate(Node):
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)
         self.declare_parameter('sensor_timeout', 1.0)
+        self.declare_parameter('alert_ttl', 3.0)
         self.declare_parameter('max_linear', 0.5)
         self.declare_parameter('max_angular', 1.5)
         self.declare_parameter('sonar_slow_distance', 0.30)
@@ -55,6 +56,8 @@ class SafetyGate(Node):
             max_angular=gp('max_angular').value)
         self.input_timeout = gp('input_timeout').value
         self.sensor_timeout = gp('sensor_timeout').value
+        self.alert_ttl = gp('alert_ttl').value
+        self.external_alerts = {}     # fuente -> (alerta, instante de recepcion)
 
         self.v_in = 0.0
         self.w_in = 0.0
@@ -79,6 +82,7 @@ class SafetyGate(Node):
                 qos_profile_sensor_data)
 
         self.create_subscription(Twist, gp('input_topic').value, self.on_input, 10)
+        self.create_subscription(String, 'nav/alert_in', self.on_alert_in, 10)
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/safety_alert', LATCHED)
 
@@ -97,6 +101,10 @@ class SafetyGate(Node):
         self.v_in = msg.linear.x
         self.w_in = msg.angular.z
         self.last_in = time.monotonic()
+
+    def on_alert_in(self, msg):
+        source, alert = parse_alert_in(msg.data)
+        self.external_alerts[source] = (alert, time.monotonic())
 
     def on_sonar(self, name, msg):
         self.sonar[name] = (float(msg.range), time.monotonic())
@@ -149,7 +157,9 @@ class SafetyGate(Node):
             v_cmd, w_cmd = self.v_in, self.w_in
 
         state = self.build_state(now)
-        v, w, alert = apply_safety(v_cmd, w_cmd, state, self.params)
+        v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params)
+        external = {src: (alert, now - t) for src, (alert, t) in self.external_alerts.items()}
+        alert = merge_alerts(local_alert, external, self.alert_ttl)
 
         out = Twist()
         out.linear.x = float(v)

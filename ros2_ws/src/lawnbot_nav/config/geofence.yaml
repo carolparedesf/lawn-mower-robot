@@ -1,0 +1,24 @@
+geofence_node:
+  ros__parameters:
+    # navsat: convierte con el servicio fromLL de navsat_transform (misma transformacion que el filtro).
+    # datum: plano tangente local alrededor de datum_lat/datum_lng, solo para pruebas sin GPS.
+    conversion_mode: navsat
+    service_name: fromLL
+    datum_lat: 0.0
+    datum_lng: 0.0
+
+    frame_id: map
+    base_frame: base_footprint
+    pose_timeout: 0.5           # s: pose mas vieja que esto = desconocida (inside false)
+    rate_hz: 10.0
+
+    # Histeresis de /geofence/inside (lecturas consecutivas a rate_hz). Con el error del GPS
+    # evita el parpadeo en el borde; salir tarda menos que entrar (falla segura).
+    hysteresis_in: 5
+    hysteresis_out: 2
+
+    min_vertices: 4
+    min_edge_length: 0.5        # m
+    min_area: 2.0               # m2
+    reconvert_period_s: 10.0    # s entre reconversiones mientras el servicio este disponible
+    persist_path: ~/.ros/lawnbot_geofence.json   # el cerco se guarda en lat/lon; '' = no guardar

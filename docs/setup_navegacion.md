@@ -20,7 +20,8 @@ bridge ◄── /nav/active_mode, /nav/safety_alert, /battery/state   (→ robo
 | `mode_manager` | `/robot_mode` → `/nav/active_mode`. Modo desconocido o sin heartbeat por 3 s → `idle` |
 | `nav_stub` ×3 | Patrones a ciegas (paralelo, aleatorio, perímetro) a 20 Hz mientras su modo está activo |
 | `twist_mux` | Prioridad: manual > perimeter > parallel > random, timeouts 0,5 s. Salida `/cmd_vel_mux` |
-| `safety_gate` | Filtra `/cmd_vel_mux` y publica `/cmd_vel` a 20 Hz. Solo limita o anula |
+| `safety_gate` | Filtra `/cmd_vel_mux` y publica `/cmd_vel` a 20 Hz. Solo limita o anula. Fusiona las alertas de `/nav/alert_in` |
+| `geofence_node` | Cerco virtual: `/geofence_raw` (lat/lon) → polígono en `map`, `/geofence/inside`, `/geofence/distance_to_edge` |
 
 Parámetros: `ros2_ws/src/lawnbot_nav/config/*.yaml` (umbrales, timeouts, sonares habilitados, bumpers).
 
@@ -172,8 +173,93 @@ es mayor, no gira: o subís `max_angular` por encima de `zona_muerta / 0,1775` o
    avance se frena y el seguidor termina en `ERROR no_progress` a los 20 s.
 5. **Robot levantado**, luego en el suelo a 0,1 m/s y después 0,2 m/s, con el e-stop listo.
 
+## Bloque A: cerco virtual, rutas por topic y auto-inicio
+
+**Rama `feat/nav-autonoma`.** Todo movimiento sale a su propio `/cmd_vel_<algoritmo>`, pasa por `twist_mux` y `safety_gate`, y nadie
+publica en `/cmd_vel` salvo el gate.
+
+### geofence_node
+
+Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]}`), lo convierte a metros del frame `map` y publica:
+
+| Topic | Tipo | Contenido |
+|---|---|---|
+| `/geofence/polygon` | `PolygonStamped` (latched) | polígono en `map` para RViz; vacío si no hay cerco válido |
+| `/geofence/inside` | `Bool` (10 Hz) | dentro del cerco, con histéresis (`hysteresis_in` = 5 lecturas para pasar a `true`, `hysteresis_out` = 2 para pasar a `false`) |
+| `/geofence/distance_to_edge` | `Float32` | distancia al borde: **positiva dentro, negativa fuera, `NaN` si se desconoce** |
+| `/geofence/status` | `String` (latched) | `NO_POLYGON`, `INVALID:<motivo>`, `WAITING_CONVERSION`, `NO_POSE`, `OK` |
+
+- **Validación:** mínimo 4 vértices (si el último repite al primero se descarta), aristas de al menos 0,5 m, área de al menos 2 m²
+  y polígono simple (sin autointersecciones ni vértices que rocen otra arista). Se normaliza a sentido antihorario. La app deja enviar
+  3 puntos; el nodo los rechaza (`INVALID:menos de 4 vertices`).
+- **Falla segura:** sin cerco, sin pose (TF ausente o de más de 0,5 s) o con el cerco sin reconvertir, `inside` es `false` y la
+  distancia `NaN`. Un valor desconocido apaga `inside` de inmediato, sin esperar la histéresis.
+- **Conversión:** con el servicio **`/fromLL` de `navsat_transform`** (`robot_localization/srv/FromLL`), es decir, con la misma
+  transformación que usa el filtro. El cerco se guarda siempre en lat/lon (también en `~/.ros/lawnbot_geofence.json`, así sobrevive
+  a reinicios) y se reconvierte cada vez que el servicio vuelve a estar disponible y cada `reconvert_period_s`, porque el origen de
+  `map` cambia entre arranques. Mientras el servicio está caído el cerco no tiene validez.
+  `navsat_transform` responde `(0, 0)` sin error si su transformación no está lista: el nodo lo detecta y reintenta.
+- `conversion_mode: datum` (con `datum_lat` y `datum_lng`) usa un plano tangente local y es solo para pruebas sin GPS. **No** es un
+  respaldo automático: mezclaría marcos distintos.
+- No mueve el robot, así que corre en cualquier modo (excepción a "un nodo no hace nada hasta que su modo está activo").
+- **Precisión:** con el error típico de un GPS común (2–3 m), `inside` y la distancia no son más exactos que eso.
+  El margen de seguridad frente al borde tiene que ser mayor que ese error.
+
+**Cómo probarlo**
+1. Sin ROS: `cd ros2_ws/src/lawnbot_nav && PYTHONPATH=. python3 test/test_geofence.py`.
+2. Nodos sin ROS (capa de ROS falsa, solo en una máquina **sin** ROS 2): `python3 tools/node_scenarios.py`.
+3. Con ROS y `fake_robot` (sin GPS): `ros2 run lawnbot_nav geofence_node --ros-args -p conversion_mode:=datum -p datum_lat:=-25.3 -p datum_lng:=-57.6`
+   y `ros2 launch lawnbot_nav follower_sim.launch.py` con `frame_id:=map`. Publicar un cerco cuadrado de ~20 m alrededor del datum:
+   ```bash
+   ros2 topic pub --once /geofence_raw std_msgs/msg/String "{data: '{\"points\":[{\"lat\":-25.3,\"lng\":-57.6},{\"lat\":-25.3,\"lng\":-57.5998},{\"lat\":-25.2998,\"lng\":-57.5998},{\"lat\":-25.2998,\"lng\":-57.6}]}'}" \
+     --qos-durability transient_local --qos-reliability reliable
+   ros2 topic echo /geofence/status --qos-durability transient_local --qos-reliability reliable
+   ros2 topic echo /geofence/inside
+   ```
+   Con `fake_robot` en `x:=10 y:=11` debe dar `OK` e `inside: true`; moviéndolo fuera, `false` a las 2 lecturas.
+4. **En la Pi, con GPS:** comprobar que el servicio exista: `ros2 service list | grep -i ll` (deben aparecer `/fromLL` y `/toLL`) y
+   `ros2 service type /fromLL` (`robot_localization/srv/FromLL`). El servicio solo responde con fix GPS y `ekf_global` activos
+   (`map → odom` publicado); antes de eso el estado es `WAITING_CONVERSION`.
+
+### waypoint_follower: rutas por topic y auto-inicio
+
+- **`/follower/path`** (`nav_msgs/Path`, latched): se acepta si `header.frame_id` coincide con el `frame_id` del seguidor, sin NaN y
+  hasta `max_path_points`. Las rutas por topic son **absolutas** (`relative_to_start` vale solo para el YAML). Una ruta nueva se
+  rechaza con el seguidor en `RUNNING`; en cualquier otro estado reemplaza a la anterior y deja el estado en `IDLE`. Un `Path` vacío
+  borra la ruta (y si estaba navegando, publica cero).
+- **`allowed_modes: [manual, auto_parallel]`.**
+- **Auto-inicio** (`auto_start_modes: [auto_parallel]`): al *entrar* a ese modo (no al arrancar el nodo ya dentro de él), con una ruta
+  cargada, arranca solo **únicamente si `/geofence/status` es `OK` y `/geofence/inside` es `true`**. Si no, no arranca y avisa por
+  `/nav/alert_in` (`follower:geofence_not_ready`) cada segundo; a los `auto_start_timeout_s` (30 s) desiste (`auto_start_timeout`).
+  Elegir el modo de nuevo lo rearma. Si el seguidor pasa a `ERROR`, avisa con `follower:tf_lost` o `follower:no_progress`.
+- **Tolerancia por ruta:** la tolerancia efectiva es `min(goal_tolerance, 0,4 × tramo más corto)`. Para líneas separadas 0,27 m es
+  0,108 m. En simulación el seguidor no saltaba waypoints con 0,2 m, pero cortaba la esquina hasta 0,2–0,3 m antes del final de cada línea;
+  con la tolerancia derivada ese corte baja a 0,06–0,16 m. Las rutas del YAML (tramos de varios metros) no cambian.
+
+**Cómo probarlo**
+1. Sin ROS: `PYTHONPATH=. python3 test/test_route.py` (rutas, tolerancia, auto-inicio, alertas y recorrido de líneas paralelas con el robot simulado).
+2. Con `fake_robot` (ROS): `ros2 launch lawnbot_nav follower_sim.launch.py x:=2.0 y:=2.0` con `frame_id:=map`, y publicar una ruta:
+   ```bash
+   ros2 topic pub --once /follower/path nav_msgs/msg/Path "{header: {frame_id: map}, poses: [
+     {pose: {position: {x: 2.0, y: 2.0}}}, {pose: {position: {x: 8.0, y: 2.0}}},
+     {pose: {position: {x: 8.0, y: 2.27}}}, {pose: {position: {x: 2.0, y: 2.27}}}]}" \
+     --qos-durability transient_local --qos-reliability reliable
+   ```
+   Con `require_active_mode:=false` se habilita con `/follower/enable`. Para probar el auto-inicio, con el modo real: publicar
+   `/robot_mode` en `auto_parallel` (con `nav.launch.py`) y ver que **no** arranca con `/geofence/status` distinto de `OK` o con
+   `/geofence/inside` en `false`, y que avisa en `/nav/alert_in`; con ambos correctos, arranca.
+
+### Alertas desde otros nodos
+
+Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
+El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
+`/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
+`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `geofence_not_ready`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+El bridge la manda como `alert` en `robot/status`.
+
 ## Pendientes
 
+- **App Flutter:** exigir 4 puntos para enviar un cerco (hoy permite 3 y el nodo los rechaza).
 - **App Flutter:** registrar un MQTT Last Will en `robot/cmd/mode` con `{"mode":"idle"}`, para que si el
   celular se desconecta el robot pase a `idle`.
 - **Firmware (no tocado):** bumpers y sonares salen a 5 Hz (`timer_sensors`), hasta ~200 ms de latencia.
