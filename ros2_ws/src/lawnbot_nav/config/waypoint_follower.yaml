@@ -30,6 +30,19 @@ waypoint_follower:
     tf_abort_s: 3.0             # s sin pose -> ERROR (antes de eso publica cero)
     pose_timeout: 0.5           # s: pose mas vieja que esto se considera perdida
 
-    allowed_modes: [manual]     # modo de la app en que se permite navegar
+    allowed_modes: [manual, auto_parallel]   # modos de la app en que se permite navegar
     require_active_mode: true   # false solo para pruebas sin bridge (p. ej. con fake_robot)
     pause_on_manual: true       # cualquier mensaje en /cmd_vel_manual pausa
+
+    # Auto-inicio: al ENTRAR a uno de estos modos, con una ruta en /follower/path, arranca solo si
+    # /geofence/status es OK y /geofence/inside es true; si no, avisa por /nav/alert_in
+    # (geofence_not_ready) y a los auto_start_timeout_s desiste (auto_start_timeout).
+    auto_start_modes: [auto_parallel]
+    auto_start_timeout_s: 30.0
+    require_geofence_for_auto_start: true
+
+    # Tolerancia para rutas: min(goal_tolerance, ratio * tramo mas corto entre puntos).
+    # Con lineas separadas 0.27 m resulta 0.108 m, asi cada vuelta se completa antes de seguir.
+    route_tolerance_ratio: 0.4
+    min_route_tolerance: 0.05
+    max_path_points: 1000

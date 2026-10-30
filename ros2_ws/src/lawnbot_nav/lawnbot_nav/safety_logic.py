@@ -13,6 +13,13 @@ ALERT_BUMPER_BACK = 'bumper_back'
 ALERT_OBSTACLE_STOP = 'obstacle_stop'
 ALERT_OBSTACLE_NEAR = 'obstacle_near'
 
+# De mayor a menor prioridad. Las alertas de otros nodos llegan por /nav/alert_in ('fuente:alerta')
+ALERT_PRIORITY = (
+    ALERT_SENSOR_TIMEOUT, ALERT_BUMPER_FRONT, ALERT_BUMPER_BACK, ALERT_OBSTACLE_STOP,
+    'estop', 'geofence_breach', 'tf_lost', 'no_progress', 'geofence_not_ready', 'no_pose',
+    'auto_start_timeout', ALERT_OBSTACLE_NEAR,
+)
+
 
 @dataclass
 class SafetyParams:
@@ -88,3 +95,24 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams):
         alert = ALERT_NONE
     return v, w, alert
 
+
+def parse_alert_in(text: str):
+    """'fuente:alerta' -> (fuente, alerta). Sin ':' la fuente es 'desconocida'."""
+    source, sep, alert = text.partition(':')
+    if not sep:
+        return 'desconocida', source.strip()
+    return source.strip(), alert.strip()
+
+
+def merge_alerts(local_alert: str, external, ttl: float = 3.0, priority=ALERT_PRIORITY) -> str:
+    """Alerta unica a publicar: la de mayor prioridad entre la local y las externas vigentes.
+
+    `external` es {fuente: (alerta, edad_en_segundos)}; las mas viejas que `ttl` se ignoran.
+    """
+    active = [local_alert] if local_alert and local_alert != ALERT_NONE else []
+    active += [alert for alert, age in external.values()
+               if alert and alert != ALERT_NONE and age <= ttl]
+    if not active:
+        return ALERT_NONE
+    order = {name: i for i, name in enumerate(priority)}
+    return min(active, key=lambda a: order.get(a, len(priority)))

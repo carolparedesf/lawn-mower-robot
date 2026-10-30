@@ -8,6 +8,8 @@ safety_gate:
     # Sensor requerido (sonar habilitado o bumper frontal) sin datos en este tiempo [s]:
     # se bloquea el avance; retroceso y giro siguen permitidos
     sensor_timeout: 1.0
+    # Las alertas de otros nodos (/nav/alert_in, 'fuente:alerta') vencen a los 3 s sin renovarse
+    alert_ttl: 3.0
 
     # Limites extra: solo reducen, nunca amplifican
     max_linear: 0.5      # m/s

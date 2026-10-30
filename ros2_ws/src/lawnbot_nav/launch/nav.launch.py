@@ -32,6 +32,9 @@ def generate_launch_description():
              output='screen', parameters=[cfg('twist_mux.yaml'), use_sim_time],
              remappings=[('cmd_vel_out', 'cmd_vel_mux')]),
 
+        Node(package='lawnbot_nav', executable='geofence_node', name='geofence_node',
+             output='screen', parameters=[cfg('geofence.yaml'), use_sim_time]),
+
         Node(package='lawnbot_nav', executable='safety_gate', name='safety_gate',
              output='screen', parameters=[cfg('safety_gate.yaml'), use_sim_time]),
     ])
