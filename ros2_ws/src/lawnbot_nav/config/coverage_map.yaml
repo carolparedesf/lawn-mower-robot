@@ -1,6 +1,8 @@
 coverage_map:
   ros__parameters:
-    resolution: 0.25             # m por celda
+    # m por celda. Por defecto 0,5 m. OJO: el GPS tiene ~2-3 m de error, asi que una celda de 0,5 m no es
+    # "exactamente la celda" por donde paso el robot; las pasadas son confiables como tendencia, no al cm.
+    resolution: 0.5
     padding: 1.0                 # m alrededor de la caja del cerco
     publish_period_s: 2.0        # /coverage/map -> el bridge lo manda por MQTT a robot/map
     pose_rate_hz: 10.0

@@ -112,6 +112,13 @@ class MarkerArray:
         self.markers = []
 
 
+class BatteryState:
+    def __init__(self):
+        self.header = Header()
+        self.percentage = 0.0
+        self.voltage = 0.0
+
+
 class Int32:
     def __init__(self, data=0):
         self.data = data
@@ -361,7 +368,7 @@ def install():
     _module('nav_msgs')
     _module('nav_msgs.msg', Path=Path)
     _module('sensor_msgs')
-    _module('sensor_msgs.msg', Range=Range, Imu=Imu)
+    _module('sensor_msgs.msg', Range=Range, Imu=Imu, BatteryState=BatteryState)
     _module('std_msgs')
     _module('std_msgs.msg', Bool=Bool, String=String, Float32=Float32, Int32=Int32)
     _module('tf2_ros', Buffer=Buffer, TransformException=TransformException,

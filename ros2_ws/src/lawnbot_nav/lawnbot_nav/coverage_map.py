@@ -35,7 +35,7 @@ class CoverageMap(Node):
         super().__init__('coverage_map')
 
         d = self.declare_parameter
-        d('resolution', 0.25)                  # m por celda
+        d('resolution', 0.5)                   # m por celda (el GPS tiene ~2-3 m de error: ver el doc)
         d('padding', 1.0)                      # m alrededor de la caja del cerco
         d('publish_period_s', 2.0)
         d('pose_rate_hz', 10.0)
@@ -52,6 +52,9 @@ class CoverageMap(Node):
 
         gp = self.get_parameter
         self.res = gp('resolution').value
+        if self.res < 0.5:
+            self.get_logger().warn(
+                f'resolution {self.res} m es menor que 0,5 m: con el error tipico del GPS (2-3 m) las pasadas por celda no son confiables')
         self.pad = gp('padding').value
         self.count_only_cutting = gp('count_only_when_cutting').value
         self.cutting_timeout = gp('cutting_timeout').value
