@@ -10,7 +10,11 @@ class ActuatorSwitchTile extends StatelessWidget {
   final String statusLabel;
   final Color statusColor;
   final bool value;
-  final ValueChanged<bool> onChanged;
+  final ValueChanged<bool>? onChanged;
+
+  /// Optional extra line (e.g. "Corriendo: no — sin pasto").
+  final String? detail;
+  final Color? detailColor;
 
   const ActuatorSwitchTile({
     super.key,
@@ -21,6 +25,8 @@ class ActuatorSwitchTile extends StatelessWidget {
     required this.statusColor,
     required this.value,
     required this.onChanged,
+    this.detail,
+    this.detailColor,
   });
 
   @override
@@ -71,6 +77,17 @@ class ActuatorSwitchTile extends StatelessWidget {
                     color: statusColor,
                   ),
                 ),
+                if (detail != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    detail!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: detailColor ?? RoboColors.textSecondary,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

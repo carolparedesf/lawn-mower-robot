@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/blade_status.dart';
+import '../models/robot_status.dart';
 import '../providers/actuator_provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
@@ -16,11 +18,55 @@ class ActuatorsScreen extends StatelessWidget {
 
   const ActuatorsScreen({super.key, required this.onSettingsTap});
 
+  /// "Pedido" and "corriendo" are shown separately: a requested motor can be
+  /// off because a safety condition is not met.
+  String _requestLabel(bool requested, bool running) =>
+      'Pedido: ${requested ? 'sí' : 'no'}  ·  Corriendo: ${running ? 'sí' : 'no'}';
+
+  String? _detail(bool requested, bool running, MotorState? motor) {
+    if (!requested || running) return null;
+    final why = whyNotRunning(motor);
+    return why == null ? 'Esperando condiciones…' : 'No corre: $why';
+  }
+
+  Future<void> _onForceCut(BuildContext context, ActuatorProvider actuator,
+      RobotStatus status, bool value) async {
+    if (!value) {
+      actuator.setActuators(status, forceCut: false);
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Cortar sin detectar pasto?'),
+        content: const Text(
+          'La cuchilla podrá encenderse aunque la cámara no vea pasto. '
+          'Solo se anula esa condición: el cerco, el robot levantado o '
+          'inclinado y la parada de emergencia siguen apagándola.\n\n'
+          'Usalo con la zona despejada.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Forzar corte'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) actuator.setActuators(status, forceCut: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = context.watch<RobotStateProvider>().currentStatus;
     final actuator = context.read<ActuatorProvider>();
     final batteryColor = batteryColorFor(status.battery);
+    final canUse = status.canUseActuators;
+    final motors = parseBladeStatus(status.bladeStatus);
 
     return Column(
       children: [
@@ -50,6 +96,11 @@ class ActuatorsScreen extends StatelessWidget {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
             children: [
+              if (!canUse)
+                const _Notice(
+                  'Cuchilla y trimmer se pueden pedir solo en modo manual o '
+                  'automático.',
+                ),
               ActuatorSwitchTile(
                 icon: Container(
                   width: 22,
@@ -57,23 +108,28 @@ class ActuatorsScreen extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: status.blade
+                      color: status.bladeRunning
                           ? RoboColors.primaryGreen
                           : RoboColors.disabled,
                       width: 3,
                     ),
                   ),
                 ),
-                iconBg: status.blade
+                iconBg: status.bladeRunning
                     ? RoboColors.selectedSurfaceAlt
                     : RoboColors.border,
                 title: 'Cuchilla de corte',
-                statusLabel: status.blade ? 'Encendida' : 'Apagada',
-                statusColor: status.blade
+                statusLabel: _requestLabel(status.blade, status.bladeRunning),
+                statusColor: status.bladeRunning
                     ? RoboColors.primaryGreen
                     : RoboColors.textSecondary,
+                detail: _detail(status.blade, status.bladeRunning,
+                    motors['cutter']),
+                detailColor: RoboColors.amberAccent,
                 value: status.blade,
-                onChanged: (v) => actuator.setActuators(status, blade: v),
+                onChanged: canUse
+                    ? (v) => actuator.setActuators(status, blade: v)
+                    : null,
               ),
               const SizedBox(height: 14),
               ActuatorSwitchTile(
@@ -83,22 +139,45 @@ class ActuatorsScreen extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(7),
                     border: Border.all(
-                      color: status.trimmer
+                      color: status.trimmerRunning
                           ? RoboColors.amberAccent
                           : RoboColors.disabled,
                       width: 3,
                     ),
                   ),
                 ),
-                iconBg:
-                    status.trimmer ? RoboColors.amberChip : RoboColors.border,
+                iconBg: status.trimmerRunning
+                    ? RoboColors.amberChip
+                    : RoboColors.border,
                 title: 'Trimmer / Bordeadora',
-                statusLabel: status.trimmer ? 'Encendido' : 'Apagado',
-                statusColor: status.trimmer
+                statusLabel:
+                    _requestLabel(status.trimmer, status.trimmerRunning),
+                statusColor: status.trimmerRunning
                     ? RoboColors.amberAccent
                     : RoboColors.textSecondary,
+                detail: _detail(status.trimmer, status.trimmerRunning,
+                    motors['trimmer']),
+                detailColor: RoboColors.amberAccent,
                 value: status.trimmer,
-                onChanged: (v) => actuator.setActuators(status, trimmer: v),
+                onChanged: canUse
+                    ? (v) => actuator.setActuators(status, trimmer: v)
+                    : null,
+              ),
+              const SizedBox(height: 14),
+              ActuatorSwitchTile(
+                icon: const Icon(Icons.grass, color: RoboColors.error),
+                iconBg: RoboColors.errorChip,
+                title: 'Cortar sin detectar pasto',
+                statusLabel: status.forceCut ? 'Forzado' : 'Desactivado',
+                statusColor: status.forceCut
+                    ? RoboColors.error
+                    : RoboColors.textSecondary,
+                detail: 'Anula solo la detección de pasto. Cerco, levantado, '
+                    'inclinación y emergencia siguen activos.',
+                value: status.forceCut,
+                onChanged: canUse
+                    ? (v) => _onForceCut(context, actuator, status, v)
+                    : null,
               ),
               const SizedBox(height: 14),
               Container(
@@ -189,6 +268,40 @@ class ActuatorsScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _Notice extends StatelessWidget {
+  final String text;
+  const _Notice(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: RoboColors.amberChip,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline,
+              size: 16, color: RoboColors.textTertiary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: RoboColors.textTertiary,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
