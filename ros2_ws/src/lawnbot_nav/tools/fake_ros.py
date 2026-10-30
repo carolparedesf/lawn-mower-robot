@@ -356,6 +356,15 @@ class FromLL:
     Request = _Req
 
 
+class _ToReq:
+    def __init__(self):
+        self.map_point = Msg(x=0.0, y=0.0, z=0.0)
+
+
+class ToLL:
+    Request = _ToReq
+
+
 def _module(name, **attrs):
     m = types.ModuleType(name)
     m.__dict__.update(attrs)
@@ -390,7 +399,7 @@ def install():
     _module('std_srvs')
     _module('std_srvs.srv', SetBool=SetBool)
     _module('robot_localization')
-    _module('robot_localization.srv', FromLL=FromLL)
+    _module('robot_localization.srv', FromLL=FromLL, ToLL=ToLL)
     _time.monotonic = lambda: MONO['t']
     _time.sleep = lambda s: None
 
