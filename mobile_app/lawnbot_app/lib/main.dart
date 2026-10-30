@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/actuator_provider.dart';
 import 'providers/connection_provider.dart';
+import 'providers/coverage_map_provider.dart';
 import 'providers/geofence_provider.dart';
 import 'providers/robot_state_provider.dart';
 import 'screens/home_screen.dart';
@@ -22,6 +23,7 @@ class RobotControlApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => RobotStateProvider()),
         ChangeNotifierProvider(create: (_) => GeofenceProvider()),
         ChangeNotifierProvider(create: (_) => ActuatorProvider()),
+        ChangeNotifierProvider(create: (_) => CoverageMapProvider()),
       ],
       child: MaterialApp(
         title: 'RobotControl',

@@ -451,6 +451,12 @@ espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obsta
   (zonas cortadas de más o de menos), no al centímetro, y la posición del propio robot en el mapa tiene ese mismo error. Una celda menor de 0,5 m no mejora nada y el nodo lo advierte en el log;
   con RTK se puede bajar. Por la misma razón el límite de pasadas (`max_passes`) conviene tomarlo con margen.
 
+### App (pestaña Cerco y Actuadores)
+
+- **Cerco:** dibuja `robot/map` sobre el mapa (capas Pasadas / Sonar / Cámara con interruptores, rotulado como *tendencia* por el error de GPS). Necesita `origin_ll`; sin él avisa que no puede ubicar la grilla. Se asume el frame `map` con x = este e y = norte.
+- **Actuadores:** cuchilla y trimmer se pueden pedir en manual y en automático (deshabilitados en idle/stop), muestran *Pedido* y *Corriendo* por separado y, si no corre, el motivo (`blade_status`). *Cortar sin detectar pasto* (`force_cut`) pide confirmación.
+- **Batería y alertas:** sin dato de batería la app muestra `--`; `alert` se traduce a español en un banner (`mobile_app/lawnbot_app/lib/models/alert_info.dart`). Tests: `flutter test` en `mobile_app/lawnbot_app`.
+
 ### Pruebas (el motor real no se conecta)
 
 1. Sin ROS: `PYTHONPATH=. python3 test/test_blade.py` y `test/test_coverage_map.py` (en `ros2_ws/src/lawnbot_nav`), y `python3 bridge/test_actuator_relay.py`.

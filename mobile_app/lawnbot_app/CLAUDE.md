@@ -53,6 +53,10 @@ lib/
 | `robot/cmd/geofence` | App → Robot | `{"points":[{"lat":float,"lng":float},...]}`| 1 |
 | `robot/position` | Robot → App | `{"lat":float,"lng":float,"hdg":float}` | 0 |
 | `robot/status` | Robot → App | `{"mode":"idle\|manual\|auto","battery":int,"alert":"none\|geofence_breach"}` | 1 |
+| `robot/cmd/actuator` | App → Robot | `{"blade":bool,"trimmer":bool,"charging":bool}` + `force_cut` opcional (solo se envía si es `true`) | 1 |
+| `robot/map` | Robot → App | Mapa de cobertura (JSON retenido): grilla `passes` / `obstacles_sonar` / `obstacles_camera` en base64, `origin` y `origin_ll` [lat, lng] | 0 |
+
+`robot/status` también trae claves opcionales: `blade`, `trimmer`, `force_cut` (lo pedido y aceptado), `blade_running` / `trimmer_running` (el motor corre de verdad), `blade_status` (por qué no corre) y `alert` (código de alerta o evento; ver `lib/models/alert_info.dart`). `battery` se omite si el robot no tiene dato: la app muestra `--`.
 
 - QoS 0 para comandos de movimiento (alta frecuencia, tolera pérdida).
 - QoS 1 para cambios de modo y geofence (deben llegar).

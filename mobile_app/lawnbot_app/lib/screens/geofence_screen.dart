@@ -6,6 +6,7 @@ import '../providers/geofence_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
 import '../models/geofence.dart';
+import '../widgets/coverage_overlay.dart';
 import '../widgets/geofence_notices.dart';
 import '../widgets/geofence_toolbar.dart';
 import '../widgets/robo_top_bar.dart';
@@ -98,6 +99,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                         userAgentPackageName:
                             'com.example.lawnbot_app',
                       ),
+                      const CoverageOverlayLayer(),
                       if (geofence.points.length >= 2)
                         PolygonLayer(
                           polygons: [
@@ -172,6 +174,8 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                         const GeofenceProblemBanner(),
                         const SizedBox(height: 6),
                         const GeofenceRobotStatus(),
+                        const SizedBox(height: 6),
+                        const CoverageControls(),
                       ],
                     ),
                   ),
