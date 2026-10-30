@@ -37,3 +37,12 @@ firmware/**/.pio/
 # macOS / Windows
 .DS_Store
 Thumbs.db
+
+# Salidas de colcon / compilacion (en cualquier carpeta)
+build/
+install/
+log/
+export.log
+
+# Indices de VS Code C++ (pueden pesar GB)
+*.vc.db
