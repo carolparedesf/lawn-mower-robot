@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,6 +9,7 @@ import '../widgets/dpad_widget.dart';
 import '../widgets/joystick_widget.dart';
 import '../widgets/robo_bottom_nav.dart';
 import '../widgets/robo_top_bar.dart';
+import '../widgets/robot_marker.dart';
 
 const LatLng _defaultCenter = LatLng(-25.2867, -57.6470);
 
@@ -126,7 +126,7 @@ class _ControlScreenState extends State<ControlScreen> {
                                     point: LatLng(robotPos.lat, robotPos.lng),
                                     width: 36,
                                     height: 36,
-                                    child: _RobotMarker(
+                                    child: RobotMarker(
                                       isConnected: isConnected,
                                       headingDegrees: robotPos.heading,
                                     ),
@@ -282,39 +282,6 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Robot position marker: 🤖 emoji on a highlighted badge while connected,
-/// a dimmed neutral icon otherwise. Rotates with `hdg` to hint heading.
-class _RobotMarker extends StatelessWidget {
-  final bool isConnected;
-  final double headingDegrees;
-
-  const _RobotMarker({
-    required this.isConnected,
-    required this.headingDegrees,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: headingDegrees * math.pi / 180,
-      child: Container(
-        decoration: BoxDecoration(
-          color: isConnected ? RoboColors.amberAccent : Colors.grey.shade400,
-          shape: BoxShape.circle,
-          border: const Border.fromBorderSide(
-            BorderSide(color: Colors.white, width: 3),
-          ),
-        ),
-        child: Center(
-          child: isConnected
-              ? const Text('🤖', style: TextStyle(fontSize: 18))
-              : const Icon(Icons.navigation, color: Colors.white, size: 18),
-        ),
-      ),
     );
   }
 }
