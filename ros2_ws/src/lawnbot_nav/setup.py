@@ -28,6 +28,7 @@ setup(
             'waypoint_follower = lawnbot_nav.waypoint_follower:main',
             'fake_robot = lawnbot_nav.fake_robot:main',
             'geofence_node = lawnbot_nav.geofence_node:main',
+            'coverage_parallel = lawnbot_nav.coverage_parallel:main',
         ],
     },
 )

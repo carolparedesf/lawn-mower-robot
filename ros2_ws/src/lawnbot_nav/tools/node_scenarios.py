@@ -347,9 +347,152 @@ def run_gate_alerts():
     check(alert() == 'none', 'si no se renueva, vence a los 3 s')
 
 
+def run_coverage():
+    print('\n[5] coverage_parallel + waypoint_follower + fake_robot (barrido completo en map)')
+    import yaml
+    from lawnbot_nav.coverage_logic import swath_coverage
+    from lawnbot_nav.coverage_parallel import CoverageParallel
+    from lawnbot_nav.fake_robot import FakeRobot
+    from lawnbot_nav.waypoint_follower import WaypointFollower
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    fol = yaml.safe_load(open(os.path.join(cfg_dir, 'waypoint_follower_map.yaml')))['waypoint_follower']['ros__parameters']
+    cov = yaml.safe_load(open(os.path.join(cfg_dir, 'coverage.yaml')))['coverage_parallel']['ros__parameters']
+
+    robot_node = make(FakeRobot, frame_id='map', cmd_topic='cmd_vel_waypoint', x=0.5, y=0.5, yaw=0.0, tau=0.1)
+    f = make(WaypointFollower, **fol)
+    c = make(CoverageParallel, **cov)
+    fake_tick, f_tick = robot_node.timer(0.02), f.timer(0.05)
+    c_maintain = c.timer(1.0)
+    cmd_cb = robot_node.subs['cmd_vel_waypoint']
+    fence_pub = lambda pts: c.subs['geofence/polygon'](_polygon(pts))   # noqa: E731
+
+    state = {'mode': None, 'last': -1, 'forwarded': 0}
+    trajectory = []
+
+    def set_mode(name):
+        state['mode'], state['last'] = name, int(R.MONO['t'])
+        for node in (f, c):
+            node.subs['nav/active_mode'](R.String(name))
+
+    def forward_paths():
+        """Lo que coverage publica en /follower/path llega al seguidor."""
+        sent = c.pubs['follower/path'].sent
+        while state['forwarded'] < len(sent):
+            f.subs['follower/path'](sent[state['forwarded']])
+            state['forwarded'] += 1
+
+    def step(dt=0.02):
+        R.advance(dt)
+        if state['mode'] and int(R.MONO['t']) != state['last']:
+            set_mode(state['mode'])
+            c_maintain()                                  # timer de 1 Hz del generador
+        fake_tick()
+        pub = f.pubs['cmd_vel_waypoint']
+        n0 = len(pub.sent)
+        f_tick()
+        for m in pub.sent[n0:]:
+            cmd_cb(m)
+        forward_paths()
+        trajectory.append((robot_node.robot.x, robot_node.robot.y))
+
+    def run(seconds):
+        for _ in range(int(seconds / 0.02)):
+            step()
+
+    def status():
+        return c.pubs['coverage/status'].last.data
+
+    set_mode('idle')
+    f.subs['geofence/status'](R.String('OK'))
+    f.subs['geofence/inside'](R.Bool(True))
+    run(0.5)
+    check(status() == 'IDLE' and len(c.pubs['follower/path'].sent) == 0, 'fuera de auto_parallel no genera nada')
+
+    # cerco no convexo (en L): error claro y ninguna ruta
+    fence_pub(L_SHAPE)
+    set_mode('auto_parallel')
+    run(1.5)
+    check(status().startswith('ERROR:') and 'convexo' in status(), f'cerco no convexo -> {status()}')
+    check(len(c.pubs['follower/path'].last.poses) == 0, '   publica una ruta vacia (nada que seguir)')
+    check(f.core.route is None and f.core.state == 'IDLE', '   el seguidor no recibe ruta ni arranca')
+    check(any(m.data == 'coverage:coverage_error' for m in c.pubs['nav/alert_in'].sent), '   avisa por /nav/alert_in: coverage_error')
+
+    # llega un cerco valido mientras se espera: genera y el seguidor arranca solo
+    fence_pub(FENCE)
+    run(0.5)
+    st = status()
+    check(st.startswith('OK lineas='), f'cerco convexo -> {st}')
+    path = c.pubs['follower/path'].last
+    check(path.header.frame_id == 'map' and len(path.poses) > 20, f'ruta en frame map con {len(path.poses)} puntos')
+    marks = c.pubs['coverage/markers'].last.markers
+    check(marks[0].action == R.Marker.DELETEALL and {m.ns for m in marks[1:]} == {'fence', 'region', 'path', 'waypoints'},
+          'markers: cerco, region, ruta y puntos')
+    first = (path.poses[0].pose.position.x, path.poses[0].pose.position.y)
+    check(min(math.dist(first, p) for p in [(0.85, 1.0), (5.15, 1.0), (0.85, 4.0), (5.15, 4.0)]) < 1e-6,
+          f'empieza por la esquina mas cercana al robot: ({first[0]:.2f}, {first[1]:.2f})')
+    R.set_pose('map', 'base_footprint', robot_node.robot.x, robot_node.robot.y)
+    t = 0.0
+    while f.core.state != 'DONE' and t < 900:
+        step()
+        t += 0.02
+        if f.core.state == 'ERROR':
+            break
+    check(f.core.state == 'DONE', f'el seguidor recorre el barrido completo hasta DONE en {t:.0f} s')
+    region = [(1.0, 1.0), (5.0, 1.0), (5.0, 4.0), (1.0, 4.0)]
+    ratio = swath_coverage(region, trajectory, cov['cutting_width'] / 2.0)
+    print(f'      area cubierta de la region de trabajo: {ratio * 100:.1f} %')
+    check(ratio > 0.97, 'cobertura de la region de trabajo > 97 %')
+    check(min(signed_distance_xy(p, FENCE) for p in trajectory) > 0.3, '   el robot nunca se acerco al borde del cerco a menos de 0,3 m')
+
+    # salir del modo: ruta vacia, markers borrados, estado IDLE
+    set_mode('stop')
+    run(0.3)
+    check(status() == 'IDLE' and len(c.pubs['follower/path'].last.poses) == 0, 'salir de auto_parallel: IDLE y ruta borrada')
+    check(f.core.route is None, '   y el seguidor se queda sin ruta')
+
+    # margen que no deja region
+    c2 = make(CoverageParallel, **dict(cov, margin=3.0))
+    c2.subs['nav/active_mode'](R.String('idle'))
+    c2.subs['geofence/polygon'](_polygon(FENCE))
+    c2.subs['nav/active_mode'](R.String('auto_parallel'))
+    st = c2.pubs['coverage/status'].last.data
+    check(st.startswith('ERROR:region vacia'), f'margen demasiado grande -> {st[:70]}...')
+
+    # sin cerco
+    c3 = make(CoverageParallel, **cov)
+    c3.subs['nav/active_mode'](R.String('idle'))
+    c3.subs['nav/active_mode'](R.String('auto_parallel'))
+    check(c3.pubs['coverage/status'].last.data == 'ERROR:sin cerco', 'sin cerco -> ERROR:sin cerco')
+
+    # arrancar el nodo ya dentro de auto_parallel no genera (solo la entrada al modo)
+    c4 = make(CoverageParallel, **cov)
+    c4.subs['geofence/polygon'](_polygon(FENCE))
+    c4.subs['nav/active_mode'](R.String('auto_parallel'))
+    check(len(c4.pubs['follower/path'].sent) == 0, 'primer mensaje de modo: solo toma la referencia')
+    c.shutdown_cleanup()
+    check(len(c.pubs['follower/path'].last.poses) == 0, 'shutdown: borra la ruta')
+
+
+FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
+L_SHAPE = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)]
+
+
+def _polygon(points, frame='map'):
+    poly = R.PolygonStamped()
+    poly.header.frame_id = frame
+    poly.polygon.points = [R.Point32(x, y, 0.0) for x, y in points]
+    return poly
+
+
+def signed_distance_xy(pt, poly):
+    from lawnbot_nav.geofence_logic import signed_distance
+    return signed_distance(pt, poly)
+
+
 if __name__ == '__main__':
     run_geofence_datum()
     run_geofence_navsat()
     run_follower_auto()
     run_gate_alerts()
+    run_coverage()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

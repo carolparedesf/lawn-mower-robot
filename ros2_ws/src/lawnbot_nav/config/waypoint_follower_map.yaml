@@ -1,0 +1,31 @@
+# Seguidor para auto_parallel: sigue la ruta que publica coverage_parallel en /follower/path (frame map).
+# Arranca solo al entrar a auto_parallel, y solo con /geofence/status OK y el robot dentro del cerco.
+waypoint_follower:
+  ros__parameters:
+    frame_id: map
+    base_frame: base_footprint
+    relative_to_start: false    # solo afecta a waypoints del YAML; las rutas por topic son absolutas
+    waypoints: [0.0, 0.0]       # sin uso: la ruta llega por /follower/path
+    loop: false
+
+    lookahead_distance: 0.5
+    goal_tolerance: 0.2
+    max_linear: 0.2
+    max_angular: 0.6
+    min_linear: 0.05
+    min_turn: 0.25
+    rotate_in_place_angle: 0.7
+    slowdown_radius: 0.6
+    progress_timeout: 20.0
+    tf_abort_s: 3.0
+    pose_timeout: 0.5
+    route_tolerance_ratio: 0.4
+    min_route_tolerance: 0.05
+    max_path_points: 1000
+
+    allowed_modes: [manual, auto_parallel]
+    require_active_mode: true
+    pause_on_manual: true
+    auto_start_modes: [auto_parallel]
+    auto_start_timeout_s: 30.0
+    require_geofence_for_auto_start: true
