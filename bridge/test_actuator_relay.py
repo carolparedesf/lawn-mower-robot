@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from actuator_relay import ActuatorRelay  # noqa: E402
+from actuator_relay import ActuatorRelay, mode_allows_actuators  # noqa: E402
 
 
 class RelayTests(unittest.TestCase):
@@ -59,17 +59,17 @@ class RelayTests(unittest.TestCase):
         r.on_command({'charging': True}, True)
         self.assertEqual(r.outputs(True), (False, False, False))
 
-    def test_sin_modo_automatico_se_ignora_y_queda_apagado(self):
+    def test_sin_modo_vigente_se_ignora_y_queda_apagado(self):
         r = ActuatorRelay()
         self.assertFalse(r.on_command({'blade': True, 'trimmer': True, 'force_cut': True}, False))
         self.assertEqual(r.outputs(True), (False, False, False))
 
-    def test_al_salir_del_modo_automatico_se_borra_y_no_vuelve_solo(self):
+    def test_al_perder_el_modo_se_borra_y_no_vuelve_solo(self):
         r = ActuatorRelay()
         r.on_command({'blade': True, 'trimmer': True, 'force_cut': True}, True)
         self.assertEqual(r.outputs(True), (True, True, True))
-        self.assertEqual(r.outputs(False), (False, False, False))      # idle / stop / manual / sin heartbeat
-        self.assertEqual(r.outputs(True), (False, False, False))       # vuelve el modo auto: sigue apagado
+        self.assertEqual(r.outputs(False), (False, False, False))      # idle / stop / sin heartbeat
+        self.assertEqual(r.outputs(True), (False, False, False))       # vuelve el modo: sigue apagado
         r.on_command({'blade': True}, True)                            # la app tiene que pedir de nuevo
         self.assertEqual(r.outputs(True), (True, False, False))
 
@@ -78,6 +78,12 @@ class RelayTests(unittest.TestCase):
         r.on_command({'blade': True}, True)
         r.on_command({'blade': True}, False)
         self.assertEqual(r.outputs(True), (False, False, False))
+
+    def test_modos_que_permiten_actuadores(self):
+        for m in ('manual', 'auto_parallel', 'auto_random', 'auto_perimeter'):
+            self.assertTrue(mode_allows_actuators(m), m)
+        for m in ('idle', 'stop', '', 'MANUAL', 'automatic', 'manual2'):
+            self.assertFalse(mode_allows_actuators(m), m)
 
 
 if __name__ == '__main__':

@@ -1072,7 +1072,20 @@ def run_bridge_actuators():
     tick(0.5)
     check(current() == (False, False, False), 'emergencyStop de la app (todo false): apaga')
 
-    for new_mode in ('idle', 'stop', 'manual'):
+    mode('manual')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True, 'charging': False})
+    tick(0.5)
+    check(current() == (True, True, False), 'en modo manual el usuario SI puede habilitar cuchilla y trimmer')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': False, 'force_cut': True})
+    tick(0.5)
+    check(current() == (True, False, True), '   y tambien force_cut')
+    mode('auto_random')
+    tick(0.5)
+    check(current() == (True, False, True), '   pasar de manual a automatico no lo apaga')
+    mqtt_msg('robot/cmd/actuator', {'blade': False, 'trimmer': False})
+    tick(0.5)
+
+    for new_mode in ('idle', 'stop'):
         mode('auto_random')
         mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True})
         tick(0.5)
@@ -1083,6 +1096,14 @@ def run_bridge_actuators():
         tick(1.0)
         check(current() == (False, False, False), '   y al volver al modo auto sigue apagado hasta que la app pida de nuevo')
 
+    mode('manual')
+    mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True})
+    tick(0.5)
+    mode('idle')
+    tick(0.5)
+    mode('manual')
+    tick(1.0)
+    check(current() == (False, False, False), 'manual -> idle -> manual: se apaga y no vuelve solo')
     mode('auto_perimeter')
     mqtt_msg('robot/cmd/actuator', {'blade': True, 'trimmer': True})
     tick(0.5)

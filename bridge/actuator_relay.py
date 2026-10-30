@@ -4,10 +4,16 @@ Payload real de la app (robot/cmd/actuator, QoS 1, uno por cada cambio; no se re
   {"blade": bool, "trimmer": bool, "charging": bool}
 `force_cut` (bool) es opcional: la app todavia no lo envia. Falta o no-bool = false. `charging` no se atiende.
 
-Reglas: arranca siempre apagado; solo se aceptan pedidos con un modo automatico vigente; al salir de uno
-(idle, stop, manual, o sin heartbeat del modo) se borra todo y la app tiene que volver a pedir.
+Reglas: arranca siempre apagado; solo se aceptan pedidos con un modo vigente que los permita (manual o automatico,
+ver mode_allows_actuators); al pasar a idle, stop o sin heartbeat del modo se borra todo y la app tiene que volver a pedir.
+Las condiciones de seguridad (cerco, levantado, volcado, estop, datos vigentes) las sigue aplicando blade_controller.
 """
 from typing import Tuple
+
+
+def mode_allows_actuators(mode: str) -> bool:
+    """Modo efectivo en el que los pedidos de cuchilla/trimmer se atienden: manual y los automaticos."""
+    return mode == 'manual' or mode.startswith('auto_')
 
 
 class ActuatorRelay:
@@ -36,7 +42,7 @@ class ActuatorRelay:
         return True
 
     def outputs(self, mode_allowed: bool) -> Tuple[bool, bool, bool]:
-        """(cutter_enable, trimmer_enable, force_cut) a publicar; sin modo automatico vigente, todo false."""
+        """(cutter_enable, trimmer_enable, force_cut) a publicar; sin un modo vigente que lo permita, todo false."""
         if not mode_allowed:
             self.clear()
         return self.blade, self.trimmer, self.force_cut

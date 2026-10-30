@@ -33,7 +33,7 @@ from std_msgs.msg import Bool, Float32, String
 import paho.mqtt.client as mqtt
 import gpsd
 
-from actuator_relay import ActuatorRelay
+from actuator_relay import ActuatorRelay, mode_allows_actuators
 from status_alert import pick_alert
 
 BROKER = "localhost"
@@ -141,7 +141,7 @@ class RobotBridge(Node):
         elif msg.topic == "robot/cmd/actuator":
             accepted = self.relay.on_command(payload, self.actuator_mode_ok())
             if not accepted:
-                self.get_logger().info("Pedido de actuadores ignorado (sin modo automatico vigente): todo apagado")
+                self.get_logger().info("Pedido de actuadores ignorado (modo idle/stop o sin heartbeat): todo apagado")
             self.publish_enables()
             self.publish_status()
 
@@ -193,10 +193,10 @@ class RobotBridge(Node):
         return self.active_mode
 
     def actuator_mode_ok(self):
-        return self.effective_mode().startswith("auto_")
+        return mode_allows_actuators(self.effective_mode())
 
     def publish_enables(self):
-        """Republica los pedidos a 4 Hz mientras la app los mantenga y haya un modo automatico vigente."""
+        """Republica los pedidos a 4 Hz mientras la app los mantenga y haya un modo manual o automatico vigente."""
         blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())
         self.cutter_enable_pub.publish(Bool(data=blade))
         self.trimmer_enable_pub.publish(Bool(data=trimmer))
