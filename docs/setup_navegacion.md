@@ -254,8 +254,55 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
 El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
 `/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
-`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `geofence_not_ready`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
 El bridge la manda como `alert` en `robot/status`.
+
+## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
+
+Al **entrar** a `auto_parallel` genera la ruta de barrido sobre el cerco y se la da al seguidor; fuera de ese modo no hace nada.
+
+```bash
+ros2 launch lawnbot_nav nav.launch.py                           # incluye geofence_node y coverage_parallel
+ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map  # seguidor en frame map con auto-inicio
+```
+
+- **Entradas:** `/geofence/polygon` (polígono en `map`, del `geofence_node`) y `/nav/active_mode`. **Salidas:** `/follower/path` (frame `map`,
+  solo los extremos de cada línea), `/coverage/markers` (`MarkerArray`: cerco, región de trabajo, ruta y puntos, para RViz) y
+  `/coverage/status`: `OK lineas=16 longitud=136.8 m tiempo_estimado=12.7 min angulo=0.0 deg espaciado=0.267 m`, `ERROR:<causa>` o `IDLE`.
+- **Algoritmo:** la región de trabajo es el cerco recortado `margin` metros hacia adentro. Las líneas son paralelas al lado más largo
+  (o a `sweep_angle_deg` si `sweep_angle_auto` es `false`) y van separadas `cutting_width × (1 − overlap)`. El espaciado se ajusta
+  levemente hacia abajo para que la última línea caiga justo en el borde interno. Se recorren en zigzag y, con `start_nearest`,
+  se empieza por el extremo de línea más cercano al robot (4 formas posibles de recorrerlo).
+- **`turn_extension`** (0,15 m): prolonga cada extremo de línea, sin pasar del margen, para que la cuchilla llegue al final real aunque el
+  seguidor corte la esquina al darse por llegado (tolerancia por ruta). No puede ser mayor que `margin`.
+- **Solo cercos convexos.** En un polígono cóncavo el tramo entre dos líneas podría cruzar fuera del cerco. Un cóncavo da
+  `ERROR:poligono no convexo`. Si el margen no deja región (`ERROR:region vacia: un margen de X m no deja espacio (el cerco mide Y m en su lado
+  mas angosto; reducir margin)`) o falta el cerco (`ERROR:sin cerco`) tampoco hay ruta. En todos los errores se publica una ruta **vacía**
+  (borra cualquier ruta vieja del seguidor) y se avisa con `coverage:coverage_error` por `/nav/alert_in` mientras el modo siga activo.
+  Si llega un cerco corregido mientras se espera, se genera en ese momento.
+- Al salir de `auto_parallel` (o al apagar el nodo) publica una ruta vacía y borra los markers.
+- **Valores provisorios:** `cutting_width` 0,30 m (medir el real) y `margin` 1,0 m (tiene que ser mayor que la dispersión real del GPS).
+- `nav.launch.py` **ya no lanza `nav_stub_parallel`** (`use_parallel_stub:=false` por defecto); si no, el patrón a ciegas tomaría el mando
+  cuando el seguidor termina o se pausa. `use_parallel_stub:=true` lo vuelve a encender.
+- `config/waypoint_follower_map.yaml`: el seguidor en `map` (las rutas por topic deben venir en su mismo frame; el cuadrado de ejemplo en `odom`
+  y la cobertura en `map` no pueden convivir en un mismo seguidor).
+
+**Cómo probarlo**
+1. Sin ROS: `PYTHONPATH=. python3 test/test_coverage.py` (convexidad, recorte, líneas, extremos, arranque cercano, errores, y el seguidor recorriendo el
+   barrido con el robot simulado midiendo el área cubierta).
+2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [5]: entrada al modo → ruta → auto-inicio → barrido completo con `fake_robot`).
+3. Con ROS y `fake_robot` (sin GPS):
+   ```bash
+   ros2 launch lawnbot_nav nav.launch.py
+   ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map
+   ros2 run lawnbot_nav geofence_node --ros-args -p conversion_mode:=datum -p datum_lat:=-25.3 -p datum_lng:=-57.6   # si no corre ya con nav.launch.py
+   ros2 run lawnbot_nav fake_robot --ros-args -p frame_id:=map -p x:=0.5 -p y:=0.5 -p cmd_topic:=cmd_vel
+   ```
+   (con `nav.launch.py` el `geofence_node` ya está; ajustarle `conversion_mode:=datum` por parámetro para esta prueba). Publicar un cerco convexo (ver el
+   Bloque A), esperar `/geofence/status` en `OK`, pasar a `auto_parallel` (`ros2 topic pub -r 1 /robot_mode std_msgs/msg/String "{data: 'auto_parallel'}" --qos-durability transient_local --qos-reliability reliable`)
+   y mirar `/coverage/status` y `/coverage/markers` en RViz (`Fixed Frame: map`). Con un cerco en L debe dar `ERROR:poligono no convexo`.
+4. **Resultado en simulación** (cerco de 6 m × 5 m, `margin` 1,0 m): 13 líneas, 58,9 m; el seguidor lo completa en ~6,5 min cubriendo el
+   **100 %** de la región de trabajo (99,6 % con 6 cm de ruido de posición) y sin acercarse al borde del cerco a menos de 0,85 m.
 
 ## Pendientes
 

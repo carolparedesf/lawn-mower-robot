@@ -78,6 +78,7 @@ class PolygonStamped:
 class Pose:
     def __init__(self):
         self.position = Vec()
+        self.orientation = Quat()
 
 
 class PoseStamped:
@@ -92,6 +93,23 @@ class Path:
         self.header = Header()
         self.header.frame_id = frame_id
         self.poses = [PoseStamped(x, y) for x, y in points]
+
+
+class Marker:
+    ADD, DELETEALL, LINE_STRIP, SPHERE_LIST = 0, 3, 4, 7
+
+    def __init__(self):
+        self.header = Header()
+        self.ns, self.id, self.type, self.action = '', 0, 0, 0
+        self.pose = Pose()
+        self.scale = Vec()
+        self.color = Msg(r=0.0, g=0.0, b=0.0, a=0.0)
+        self.points = []
+
+
+class MarkerArray:
+    def __init__(self):
+        self.markers = []
 
 
 class Range:
@@ -314,7 +332,9 @@ def install():
     _module('rclpy.time', Time=Time)
     _module('geometry_msgs')
     _module('geometry_msgs.msg', Twist=Twist, TransformStamped=TransformStamped,
-            PolygonStamped=PolygonStamped, Point32=Point32)
+            PolygonStamped=PolygonStamped, Point32=Point32, PoseStamped=PoseStamped, Point=Point32)
+    _module('visualization_msgs')
+    _module('visualization_msgs.msg', Marker=Marker, MarkerArray=MarkerArray)
     _module('nav_msgs')
     _module('nav_msgs.msg', Path=Path)
     _module('sensor_msgs')

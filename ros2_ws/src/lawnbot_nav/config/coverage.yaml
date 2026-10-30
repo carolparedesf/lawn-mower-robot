@@ -1,0 +1,21 @@
+coverage_parallel:
+  ros__parameters:
+    # Ancho de corte real de la cuchilla [m]. PROVISORIO: medirlo y reemplazarlo aca.
+    cutting_width: 0.30
+    overlap: 0.10                # fraccion de solape entre pasadas (separacion = ancho * (1 - solape))
+    # Distancia al borde del cerco [m]. PROVISORIO: tiene que ser mayor que la dispersion real del GPS.
+    margin: 1.0
+    sweep_angle_auto: true       # true: paralelo al lado mas largo del cerco
+    sweep_angle_deg: 0.0         # usado solo con sweep_angle_auto: false (0 = este, 90 = norte)
+    start_nearest: true          # empieza por el extremo de linea mas cercano al robot
+    # Prolonga cada extremo de linea [m] para que la cuchilla llegue al final real aunque el
+    # seguidor corte la esquina. No puede superar a margin.
+    turn_extension: 0.15
+
+    # Solo para estimar el tiempo en /coverage/status
+    est_linear: 0.2
+    est_angular: 0.6
+
+    frame_id: map
+    base_frame: base_footprint
+    pose_timeout: 0.5
