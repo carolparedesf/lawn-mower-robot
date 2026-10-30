@@ -1,0 +1,31 @@
+# Nodo de vision. Los numeros de decimales son obligatorios en los parametros de tipo real (ej. 0.0, no 0).
+vision_node:
+  ros__parameters:
+    model: /home/mow/lawnbot/ncnn_640        # carpeta del modelo exportado (ncnn)
+    source: "0"                              # indice de camara o ruta de un video
+    imgsz: 640                               # debe coincidir con el export
+    conf: 0.4
+    max_fps: 5.0                             # la Pi 4 comparte CPU con ROS: medir antes de subirlo
+    publish_rate_hz: 5.0
+    stale_s: 1.0
+    frame_id: base_footprint
+    grass_class: pasto
+    use_test_alias: false                    # true solo con el modelo generico yolov8n-seg
+    start_capture: true
+
+    min_grass: 0.10                          # fraccion de la imagen que debe ser pasto
+    grass_window: 7                          # cuadros; "hay pasto" si la mayoria lo vio
+    obstacle_classes: [arbol, planta, barrera, otro]
+    min_rho: 0.05
+
+    # ── Calibracion y camara: PROVISORIOS, medir con el robot armado ──
+    calibrated: false                        # mientras sea false, /vision/obstacles sale vacio
+    fov_h_deg: 62.0                          # campo de vision horizontal (supuesto)
+    # Fila de la base del objeto [px] (de lejos a cerca, creciente) y distancia real [m] (decreciente).
+    # Salen de calibrar.py. Estos son los valores de ejemplo de potential_field.py.
+    calib_y: [300.0, 420.0]
+    calib_d: [1.5, 0.5]
+    # Montaje de la camara en base_footprint (el URDF no la tiene)
+    cam_x: 0.0
+    cam_y: 0.0
+    cam_yaw_deg: 0.0
