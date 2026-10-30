@@ -1,0 +1,17 @@
+navsat_transform:
+  ros__parameters:
+    frequency: 10.0
+    delay: 3.0
+    # Declinacion magnetica de Asuncion, Paraguay: -15.626 grados (oeste).
+    # NOAA NCEI Geomagnetic Calculator, modelo WMM-2025, lat -25.2637 lon -57.5759,
+    # fecha 2026-10-27 (incertidumbre 0.39 deg; variacion secular -0.17 deg/ano).
+    # -15.62622 * pi / 180 = -0.27273 rad
+    magnetic_declination_radians: -0.27273
+    # El IMU (imu_node) entrega yaw ENU: 0 mirando al este
+    yaw_offset: 0.0
+    zero_altitude: true
+    broadcast_cartesian_transform: false
+    broadcast_cartesian_transform_as_parent_frame: false
+    publish_filtered_gps: true
+    use_odometry_yaw: false
+    wait_for_datum: false
