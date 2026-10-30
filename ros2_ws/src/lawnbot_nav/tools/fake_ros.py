@@ -385,7 +385,7 @@ def install():
     _module('geometry_msgs')
     _module('geometry_msgs.msg', Twist=Twist, TransformStamped=TransformStamped,
             PolygonStamped=PolygonStamped, Point32=Point32, PoseStamped=PoseStamped, Point=Point32,
-            PoseArray=PoseArray)
+            PoseArray=PoseArray, Pose=Pose)
     _module('visualization_msgs')
     _module('visualization_msgs.msg', Marker=Marker, MarkerArray=MarkerArray)
     _module('nav_msgs')

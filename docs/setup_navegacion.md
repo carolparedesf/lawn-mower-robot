@@ -477,6 +477,26 @@ espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obsta
    Simular cada condición: `/estop` `true`, `/geofence/inside` fuera del cerco, dos bumpers `true` a la vez (B3 y B4), un `Imu` inclinado, o cortar un publicador (dato viejo).
    Ver el mapa por MQTT: `mosquitto_sub -t robot/map -C 1`.
 
+## Visión (`lawnbot_vision`)
+
+Nodo `vision_node` (`ros2_ws/src/lawnbot_vision`, `config/vision.yaml`). Reemplaza a `vision_stub`: **no correr los dos a la vez** (publican los mismos topics; `nav.launch.py` solo lanza el stub con `use_vision_stub:=true`).
+Usa el mismo modelo y las mismas fórmulas que los scripts de la Pi (`vision/pi_scripts/`), sin cambiar el modelo.
+
+```bash
+ros2 launch lawnbot_vision vision.launch.py
+ros2 topic echo /vision/status        # ok pasto=0.31 obstaculos=2 | sin_datos | SIN_CALIBRAR
+```
+
+- **`/vision/grass_present`** (Bool, 5 Hz): hay pasto si la máscara de `pasto` ocupa ≥ `min_grass` (10 %) de la imagen en la mayoría de los últimos `grass_window` (7) cuadros. Es "hay pasto en alguna parte del cuadro", **no** "hay pasto bajo la cuchilla". `blade_controller` lo exige vigente (1 s).
+- **`/vision/obstacles`** (`PoseArray`, frame `base_footprint`, x adelante, y izquierda): un punto por máscara de `arbol`, `planta`, `barrera` u `otro`, en su punto de apoyo (fila más baja). Distancia por interpolación de `calib_y` / `calib_d`; ángulo por columna y `fov_h_deg`; luego el montaje de la cámara (`cam_x`, `cam_y`, `cam_yaw_deg`).
+  Un objeto más lejos que el punto más lejano calibrado **no se publica** (no se sabe cuánto); más cerca que el más cercano se toma a esa distancia mínima. Lo consumen `coverage_map` y `potential_field` (con `use_vision: true`).
+- **Falla segura:** sin cámara, sin modelo, con un cuadro fallido o con un resultado de más de `stale_s` (1 s) publica `grass_present=false` y obstáculos vacíos (la cuchilla se apaga). Al cerrarse hace lo mismo. Si no puede abrir el modelo o la cámara lo dice en el log y sigue publicando "sin datos".
+- **`calibrated: false` por defecto:** mientras sea `false`, `/vision/obstacles` sale **vacío** (las distancias de ejemplo no son reales) y el log avisa. Para activarlo: correr `calibrar.py`, copiar `CALIB_Y` / `CALIB_D` a `calib_y` / `calib_d` (con decimales: `300.0`), medir el campo de visión y el montaje de la cámara (el URDF no la tiene), y poner `calibrated: true`.
+  Una tabla inválida (`calib_y` no creciente, `calib_d` no decreciente) impide arrancar el nodo.
+- **En la Pi:** `ultralytics` y `opencv` se instalan con pip, no con rosdep; el nodo corre con el Python donde estén instalados (probar `python3 -c "import ultralytics, cv2"` con el entorno de ROS cargado). `max_fps: 5.0` es un tope inicial: medir el consumo de CPU junto al resto de los nodos.
+  La cámara la abre un solo proceso: **no** correr `pi_stream.py` a la vez.
+- Pruebas sin ROS: `cd ros2_ws/src/lawnbot_vision && PYTHONPATH=. python3 test/test_vision_logic.py` y el escenario [14] de `tools/node_scenarios.py`. `colcon build --packages-select lawnbot_vision`.
+
 ## Bloque D: evasión por campo de potencial (`potential_field`)
 
 Nodo `potential_field` (`config/potential_field.yaml`, arranca con `nav.launch.py`) que **corrige la orden del algoritmo activo** con la repulsión de los obstáculos cercanos. No planifica rutas.

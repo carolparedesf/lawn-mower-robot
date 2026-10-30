@@ -1513,6 +1513,74 @@ def run_map_origin():
     none = make(CoverageMap, origin_source='none')
     check(none.origin_ll is None and 'toLL' not in none.clients, "origin_source 'none': sin origin_ll")
 
+def run_vision():
+    print('\n[14] vision_node: /vision/grass_present y /vision/obstacles con detecciones simuladas (sin camara ni modelo)')
+    import yaml
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), 'lawnbot_vision'))
+    from lawnbot_vision.vision_logic import Detection
+    from lawnbot_vision.vision_node import VisionNode
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.dirname(HERE)), 'lawnbot_vision', 'config', 'vision.yaml')))
+    cfg = cfg['vision_node']['ros__parameters']
+    check(cfg['calibrated'] is False and cfg['source'] == '0', 'vision.yaml: arranca sin calibrar')
+
+    n = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1))
+    check(n.thread is None and n.get_logger().has('calibrated=false', 'WARN'), 'sin calibrar: avisa en el log (y sin camara en la prueba)')
+    tick = n.timer(0.2)
+    grass, obst = n.pubs['vision/grass_present'], n.pubs['vision/obstacles']
+    tick()
+    check(grass.last.data is False and obst.last.poses == [], 'sin ningun dato: grass_present=false y obstaculos vacios')
+    check(n.pubs['vision/status'].last.data == 'sin_datos', '   y vision/status = sin_datos')
+
+    n.on_detection(0.4, [Detection('arbol', 320, 360)], 640)
+    tick()
+    check(grass.last.data is True, 'con pasto en el cuadro: grass_present=true')
+    check(obst.last.poses == [], 'sin calibrar: /vision/obstacles vacio aunque haya un arbol')
+    check('SIN_CALIBRAR' in n.pubs['vision/status'].last.data, '   y vision/status lo dice')
+
+    c = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1, calibrated=True, cam_x=0.2))
+    ctick = c.timer(0.2)
+    c.on_detection(0.4, [Detection('arbol', 320, 360), Detection('caminero', 100, 400)], 640)
+    ctick()
+    poses = c.pubs['vision/obstacles'].last.poses
+    check(len(poses) == 1 and abs(poses[0].position.x - 1.2) < 1e-6 and abs(poses[0].position.y) < 1e-6,
+          'calibrado: un arbol a 1,0 m al frente con la camara 0,2 m adelante queda en x=1,2 (caminero ignorado)')
+    check(c.pubs['vision/obstacles'].last.header.frame_id == 'base_footprint', '   en el frame base_footprint')
+
+    R.advance(0.5)
+    ctick()
+    check(c.pubs['vision/grass_present'].last.data is True, 'resultado de 0,5 s: todavia vigente')
+    R.advance(0.8)
+    ctick()
+    check(c.pubs['vision/grass_present'].last.data is False and c.pubs['vision/obstacles'].last.poses == [],
+          'resultado de mas de stale_s (1 s): grass_present=false y obstaculos vacios')
+    check(c.pubs['vision/status'].last.data == 'sin_datos', '   y status sin_datos')
+
+    c.on_detection(0.4, [], 640)
+    ctick()
+    check(c.pubs['vision/grass_present'].last.data is True, 'vuelve el dato: retoma')
+    c.on_failure()
+    ctick()
+    check(c.pubs['vision/grass_present'].last.data is False, 'falla de camara/modelo: false de inmediato')
+
+    c.on_detection(0.4, [], 640)
+    c.shutdown_cleanup()
+    check(c.pubs['vision/grass_present'].last.data is False and c.pubs['vision/obstacles'].last.poses == [],
+          'shutdown: grass_present=false y obstaculos vacios')
+
+    try:
+        make(VisionNode, **dict(cfg, start_capture=False, calib_y=[420.0, 300.0]))
+        check(False, 'calibracion invalida debe fallar')
+    except ValueError:
+        check(True, 'calibracion invalida (calib_y decreciente): el nodo no arranca')
+
+    # sin ultralytics/cv2 (esta maquina): el hilo de captura falla con mensaje claro y el nodo publica "sin datos"
+    t = make(VisionNode, **dict(cfg, start_capture=False))
+    t.capture_loop()
+    check(t.get_logger().has('vision no arranca', 'ERROR'), 'si el modelo o la camara no cargan: error claro en el log, sin caerse')
+    t.timer(0.2)()
+    check(t.pubs['vision/grass_present'].last.data is False, '   y publica grass_present=false')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1603,4 +1671,5 @@ if __name__ == '__main__':
     run_potential_field()
     run_pf_gating()
     run_map_origin()
+    run_vision()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
