@@ -1,0 +1,17 @@
+coverage_map:
+  ros__parameters:
+    resolution: 0.25             # m por celda
+    padding: 1.0                 # m alrededor de la caja del cerco
+    publish_period_s: 2.0        # /coverage/map -> el bridge lo manda por MQTT a robot/map
+    pose_rate_hz: 10.0
+    count_only_when_cutting: true   # una pasada cuenta solo si /cutter/cmd > 0 durante la visita
+    cutting_timeout: 0.5
+    hysteresis: 0.15             # fraccion de celda que hay que pasarse del borde para contar el cambio de celda
+    use_sonars: true
+    sonar_max_range: 1.5
+    # Angulo de montaje de los sonares laterales (el URDF los pone al frente, 0). PROVISORIO: medirlo.
+    sonar_left_yaw_deg: 0.0
+    sonar_right_yaw_deg: 0.0
+    frame_id: map
+    base_frame: base_footprint
+    pose_timeout: 0.5

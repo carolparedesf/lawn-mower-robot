@@ -381,6 +381,68 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    y sin salir del cerco; `perimeter` (modo bumper) da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque, y con la pared fuera de alcance
    se rinde a los 25 s con `perimeter_lost`; con el refinamiento del sonar lateral mantiene ~0,3 m.
 
+## Bloque E: control de la cuchilla y mapa de cobertura
+
+```
+/cutter/enable, /trimmer/enable (Bool) ─┐
+/geofence/inside, /vision/grass_present, bumpers B1..B5, /imu/data, /estop, /coverage/cell_passes
+                                         └─► blade_controller ──► /cutter/cmd, /trimmer/cmd (Float32, 10 Hz) ──► cutting_motors (sin cambios)
+fake_robot / robot ──► coverage_map ──► /coverage/cell_passes (Int32), /coverage/map (JSON) ──► bridge ──► MQTT robot/map
+```
+
+### blade_controller (`config/blade_controller.yaml`)
+
+Publica el duty a **10 Hz** (el `cutting_motors` existente corta solo a los 0,5 s sin órdenes, y no se modificó). Cada motor recibe duty > 0 **solo
+si se cumplen todas** las condiciones; en cuanto falla una, o un dato se vuelve viejo, se publica **0** (se sigue publicando el 0, así el watchdog
+queda alimentado y apagado). Nunca se publica más que `max_duty` del motor.
+
+| Condición | Cuchilla | Trimmer | Motivo que informa `/blade/status` |
+|---|---|---|---|
+| Pedido por `/cutter/enable` / `/trimmer/enable` (Bool; sin pedido, o al arrancar, todo apagado) | ✓ | ✓ | `sin_pedido` |
+| `/geofence/inside` `true` | ✓ | ✓ | `fuera_del_cerco`, `geofence_sin_dato` |
+| `grass_present` `true` (`/vision/grass_present`) | ✓ | — | `sin_pasto`, `pasto_sin_dato` |
+| Robot no levantado: (B3 y B4) o (B1 y B5) o (B2 y B5) | ✓ | ✓ | `levantado`, `bumpers_sin_dato` |
+| Robot no volcado: inclinación del IMU ≤ `max_tilt_deg` (30°) | ✓ | ✓ | `volcado`, `imu_sin_dato` |
+| Sin `/estop` | ✓ | ✓ | `estop` |
+| Celda con **menos** de `max_passes` (2) pasadas completadas | ✓ | ✓ | `celda_con_demasiadas_pasadas`, `pasadas_desconocidas` |
+| Todos los datos vigentes (`input_timeout` 1,0 s; IMU 0,5 s) | ✓ | ✓ | `*_sin_dato` |
+
+- **Levantado y volcado se mantienen apagados** `lift_hold_s` / `tilt_hold_s` (3 s) después de resolverse (rebote de bumpers). El firmware entra en estop al
+  levantar pero **no lo publica en ROS**, por eso se replica la lógica con los bumpers; los 5 bumpers tienen que estar vigentes para poder detectarlo.
+- **`max_duty_cutter` / `max_duty_trimmer`:** 0,30 por defecto (conservador). Si se cargan `pack_voltage` y `cutter_nominal_voltage` / `trimmer_nominal_voltage`, el
+  tope baja además a `tensión_del_motor / tensión_del_pack` (un motor de 12 V en un pack de 24 V no pasa de 0,5). **Datos que faltan: tensión nominal de cada
+  motor y tensión del pack.**
+- **Quién da el pedido:** hoy hay que publicar `/cutter/enable` y `/trimmer/enable`. Falta conectar `robot/cmd/actuator` de la app a esos topics en el bridge.
+- **`grass_present`:** la cámara no está calibrada y nadie publica `/vision/grass_present`; sin dato la cuchilla **no enciende** (el trimmer sí, si el resto se cumple).
+  `vision_stub` (`use_vision_stub:=true` en `nav.launch.py`) publica `grass_present: false` y obstáculos vacíos; poner `grass_present: true` solo para pruebas de banco.
+
+### coverage_map (`config/coverage_map.yaml`)
+
+Grilla de 0,25 m sobre la caja del cerco (+1 m). Mantiene, por celda: **pasadas completadas**, **certeza de obstáculo por sonar** (un eco sube la certeza de la celda; el
+espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obstacles`, `PoseArray` en `base_footprint`).
+- **Pasada:** una visita a la celda durante la cual la cuchilla estaba cortando (`/cutter/cmd > 0`; `count_only_when_cutting: false` cuenta todas), que se cuenta **al salir**
+  de la celda (con histéresis, así el vaivén en el borde no suma). `/coverage/cell_passes` informa las completadas **sin** contar la visita en curso, y `-1` si se desconoce.
+- **`robot/map` (MQTT):** el bridge reenvía `/coverage/map` (cada 2 s, QoS 0, retenido). JSON: `frame`, `resolution`, `origin [x0, y0]`, `width`, `height`, `encoding`
+  (`base64-u8-row-major`), `passes` (0–255), `obstacles_sonar` y `obstacles_camera` (certeza 0–100), `robot [x, y, yaw]` y `stamp`. Cada capa son `width × height` bytes en base64,
+  fila por fila desde el origen. Para un cerco de 42 × 32 m son ~100 KB por mensaje. Los topics existentes de MQTT no cambian.
+
+### Pruebas (el motor real no se conecta)
+
+1. Sin ROS: `PYTHONPATH=. python3 test/test_blade.py` y `test/test_coverage_map.py`.
+2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [8]: con sensores simulados verifica que `/cutter/cmd` pasa a 0 en cada condición, con datos viejos, y que la
+   tercera pasada por la misma línea ya no corta; un modelo de `cutting_motors` sin hardware recibe lo publicado).
+3. Con ROS, sin motores (no lanzar `cutting_motors` ni `hardware.launch.py`):
+   ```bash
+   ros2 launch lawnbot_nav nav.launch.py use_vision_stub:=true
+   ros2 launch lawnbot_nav sim_world.launch.py        # robot simulado; hace falta un cerco OK (Bloque A) para tener inside y celdas
+   ros2 topic echo /blade/status
+   ros2 topic echo /cutter/cmd                         # 0.0 mientras no haya pedido
+   ros2 topic pub --once /cutter/enable std_msgs/msg/Bool "{data: true}"
+   ```
+   Con `grass_present` en `false` (`vision_stub` por defecto) la cuchilla queda en 0 (`sin_pasto`); para la prueba de banco, `ros2 run lawnbot_nav vision_stub --ros-args -p grass_present:=true`.
+   Simular cada condición: `/estop` `true`, `/geofence/inside` fuera del cerco, dos bumpers `true` a la vez (B3 y B4), un `Imu` inclinado, o cortar un publicador (dato viejo).
+   Ver el mapa por MQTT: `mosquitto_sub -t robot/map -C 1`.
+
 ## Pendientes
 
 - **App Flutter:** exigir 4 puntos para enviar un cerco (hoy permite 3 y el nodo los rechaza).

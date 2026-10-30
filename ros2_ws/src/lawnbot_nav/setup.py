@@ -31,6 +31,9 @@ setup(
             'coverage_parallel = lawnbot_nav.coverage_parallel:main',
             'random_walk = lawnbot_nav.random_walk:main',
             'perimeter = lawnbot_nav.perimeter:main',
+            'blade_controller = lawnbot_nav.blade_controller:main',
+            'coverage_map = lawnbot_nav.coverage_map:main',
+            'vision_stub = lawnbot_nav.vision_stub:main',
         ],
     },
 )

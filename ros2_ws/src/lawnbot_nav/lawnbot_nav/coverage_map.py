@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Mapa de cobertura: pasadas por celda y obstaculos (sonar y camara), sobre la caja del cerco.
+
+Publica /coverage/cell_passes (Int32: pasadas completadas de la celda donde esta el robot, -1 si se desconoce;
+lo lee blade_controller) y /coverage/map (String con JSON, ver CoverageGrid.to_dict) para que el bridge lo
+mande por MQTT a robot/map. Una pasada cuenta solo si la cuchilla estaba cortando (/cutter/cmd > 0), salvo
+`count_only_when_cutting: false`. No mueve el robot.
+"""
+import json
+import math
+import time
+
+from geometry_msgs.msg import PoseArray, PolygonStamped
+from rclpy.node import Node
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
+                       ReliabilityPolicy, qos_profile_sensor_data)
+from sensor_msgs.msg import Range
+from std_msgs.msg import Float32, Int32, String
+from tf2_ros import Buffer, TransformListener
+
+from lawnbot_nav.coverage_map_logic import CoverageGrid
+from lawnbot_nav.node_utils import spin_with_cleanup
+from lawnbot_nav.sensor_cache import SONARS, SensorCache
+from lawnbot_nav.sim_world import SONAR_MOUNTS
+from lawnbot_nav.tf_utils import lookup_pose
+
+LATCHED = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST, depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+
+class CoverageMap(Node):
+    def __init__(self):
+        super().__init__('coverage_map')
+
+        d = self.declare_parameter
+        d('resolution', 0.25)                  # m por celda
+        d('padding', 1.0)                      # m alrededor de la caja del cerco
+        d('publish_period_s', 2.0)
+        d('pose_rate_hz', 10.0)
+        d('count_only_when_cutting', True)
+        d('cutting_timeout', 0.5)              # s: /cutter/cmd mas viejo que esto = no esta cortando
+        d('sonar_max_range', 1.5)
+        d('sonar_left_yaw_deg', 0.0)           # angulo de montaje de los sonares (el URDF los pone al frente)
+        d('sonar_right_yaw_deg', 0.0)
+        d('use_sonars', True)
+        d('frame_id', 'map')
+        d('base_frame', 'base_footprint')
+        d('pose_timeout', 0.5)
+        d('hysteresis', 0.15)
+
+        gp = self.get_parameter
+        self.res = gp('resolution').value
+        self.pad = gp('padding').value
+        self.count_only_cutting = gp('count_only_when_cutting').value
+        self.cutting_timeout = gp('cutting_timeout').value
+        self.max_range = gp('sonar_max_range').value
+        self.yaw = {'left': gp('sonar_left_yaw_deg').value, 'center': 0.0, 'right': gp('sonar_right_yaw_deg').value}
+        self.use_sonars = gp('use_sonars').value
+        self.frame_id = gp('frame_id').value
+        self.base_frame = gp('base_frame').value
+        self.pose_timeout = gp('pose_timeout').value
+        self.hysteresis = gp('hysteresis').value
+        self.publish_period = gp('publish_period_s').value
+
+        self.grid = None
+        self.polygon = None
+        self.cache = SensorCache()
+        self.last_map_pub = 0.0
+        self.last_pose = None
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.passes_pub = self.create_publisher(Int32, 'coverage/cell_passes', 10)
+        self.map_pub = self.create_publisher(String, 'coverage/map', 10)
+        self.create_subscription(PolygonStamped, 'geofence/polygon', self.on_polygon, LATCHED)
+        self.create_subscription(Float32, 'cutter/cmd', lambda m: self.cache.set('cutter', m.data, time.monotonic()), 10)
+        self.create_subscription(PoseArray, 'vision/obstacles', self.on_camera, 10)
+        if self.use_sonars:
+            for s in SONARS:
+                self.create_subscription(Range, f'sonar/{s}', lambda m, s=s: self.on_sonar(s, m),
+                                         qos_profile_sensor_data)
+        self.create_timer(1.0 / gp('pose_rate_hz').value, self.tick)
+        self.get_logger().info(f'coverage_map listo (celdas de {self.res} m, cuenta pasadas {"solo cortando" if self.count_only_cutting else "siempre"})')
+
+    # ── Entradas ─────────────────────────────────────────────
+
+    def on_polygon(self, msg):
+        points = [(p.x, p.y) for p in msg.polygon.points]
+        frame_ok = (not msg.header.frame_id) or msg.header.frame_id == self.frame_id
+        poly = points if len(points) >= 3 and frame_ok else None
+        if poly == self.polygon:
+            return
+        self.polygon = poly
+        if poly is None:
+            self.grid = None
+            self.get_logger().info('sin cerco: se descarta el mapa')
+        else:
+            self.grid = CoverageGrid.from_polygon(poly, self.res, self.pad, hysteresis=self.hysteresis)
+            self.get_logger().info(f'cerco nuevo: grilla de {self.grid.w} x {self.grid.h} celdas')
+
+    def get_pose(self):
+        return lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame, self.pose_timeout)
+
+    def on_sonar(self, name, msg):
+        pose = self.last_pose
+        if self.grid is None or pose is None:
+            return
+        mx, my = SONAR_MOUNTS[name]
+        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+        self.grid.add_sonar(pose.x + c * mx - s * my, pose.y + s * mx + c * my,
+                            pose.yaw + math.radians(self.yaw[name]), float(msg.range), self.max_range)
+
+    def on_camera(self, msg):
+        pose = self.last_pose
+        if self.grid is None or pose is None:
+            return
+        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+        self.grid.add_camera((pose.x + c * p.position.x - s * p.position.y,
+                              pose.y + s * p.position.x + c * p.position.y) for p in msg.poses)
+
+    # ── Ciclo ────────────────────────────────────────────────
+
+    def cutting(self, now):
+        if not self.count_only_cutting:
+            return True
+        value = self.cache.get('cutter', now, self.cutting_timeout)
+        return value is not None and value > 0.0
+
+    def tick(self):
+        now = time.monotonic()
+        pose = self.get_pose()
+        self.last_pose = pose
+        passes = -1
+        if self.grid is not None and pose is not None:
+            result = self.grid.update_pose(pose.x, pose.y, self.cutting(now))
+            passes = -1 if result is None else int(result)
+        self.passes_pub.publish(Int32(data=passes))
+
+        if self.grid is not None and now - self.last_map_pub >= self.publish_period:
+            self.last_map_pub = now
+            robot = (pose.x, pose.y, pose.yaw) if pose is not None else None
+            self.map_pub.publish(String(data=json.dumps(self.grid.to_dict(robot, stamp=time.time()))))
+
+    def shutdown_cleanup(self):
+        self.passes_pub.publish(Int32(data=-1))          # sin nodo no hay dato: el cortador se apaga
+
+
+def main(args=None):
+    spin_with_cleanup(CoverageMap, args)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,23 @@
+blade_controller:
+  ros__parameters:
+    rate_hz: 10.0                # el nodo cutting_motors corta solo a los 0,5 s sin ordenes
+    input_timeout: 1.0           # s: un dato mas viejo que esto cuenta como faltante (falla segura)
+    imu_timeout: 0.5
+    cutter_topic: cutter/cmd
+    trimmer_topic: trimmer/cmd
+    grass_topic: vision/grass_present
+
+    # Tope del duty publicado por motor [0..1]. CONSERVADOR: subirlo solo con la tension del motor y del pack.
+    max_duty_cutter: 0.30
+    max_duty_trimmer: 0.30
+    # Si se conocen las tensiones, el tope se limita ademas a tension_nominal_del_motor / tension_del_pack.
+    # PENDIENTE DE MEDIR (0 = desconocida, no limita):
+    pack_voltage: 0.0
+    cutter_nominal_voltage: 0.0
+    trimmer_nominal_voltage: 0.0
+
+    max_passes: 2                # la celda debe tener MENOS pasadas completadas que esto para cortar
+    require_grass: true          # solo la cuchilla; con false ignora /vision/grass_present (solo pruebas de banco)
+    max_tilt_deg: 30.0           # inclinacion que se considera volcado
+    tilt_hold_s: 3.0             # tras volcarse, se mantiene apagado este tiempo
+    lift_hold_s: 3.0             # idem tras detectar levantado: (B3 y B4) o (B1 y B5) o (B2 y B5)

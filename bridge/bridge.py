@@ -8,6 +8,7 @@ MQTT -> ROS:
 ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert)
   robot/position     <- gpsd (hilo propio, sin cambios)
+  robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
 
 La navegacion automatica ya no vive aqui: la resuelven mode_manager / twist_mux / safety_gate
 (paquete lawnbot_nav). El bridge no publica en /cmd_vel.
@@ -54,6 +55,7 @@ class RobotBridge(Node):
         self.create_subscription(String, 'nav/safety_alert', self.on_safety_alert, LATCHED)
         self.create_subscription(BatteryState, 'battery/state', self.on_battery,
                                  qos_profile_sensor_data)
+        self.create_subscription(String, 'coverage/map', self.on_coverage_map, 10)
 
         # Estado
         self.requested_mode = "idle"
@@ -170,6 +172,10 @@ class RobotBridge(Node):
         if msg.voltage > BATTERY_MIN_VALID_V and 0.0 <= pct <= 100.0:
             self.battery_pct = pct
             self.battery_time = time.monotonic()
+
+    def on_coverage_map(self, msg):
+        # Mapa de cobertura para la app. Retenido: quien se suscriba despues recibe el ultimo de inmediato.
+        self.mqtt.publish("robot/map", msg.data, qos=0, retain=True)
 
     def publish_status(self):
         now = time.monotonic()

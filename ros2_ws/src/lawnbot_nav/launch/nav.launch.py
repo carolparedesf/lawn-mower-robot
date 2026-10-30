@@ -30,6 +30,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_parallel_stub', default_value='false'),
         DeclareLaunchArgument('use_random_stub', default_value='false'),
         DeclareLaunchArgument('use_perimeter_stub', default_value='false'),
+        # Camara sin calibrar: vision_stub publica obstaculos vacios y grass_present=false (la cuchilla no enciende)
+        DeclareLaunchArgument('use_vision_stub', default_value='false'),
 
         Node(package='lawnbot_nav', executable='mode_manager', name='mode_manager',
              output='screen', parameters=[cfg('mode_manager.yaml'), use_sim_time]),
@@ -51,6 +53,15 @@ def generate_launch_description():
 
         Node(package='lawnbot_nav', executable='perimeter', name='perimeter',
              output='screen', parameters=[cfg('perimeter.yaml'), use_sim_time]),
+
+        Node(package='lawnbot_nav', executable='coverage_map', name='coverage_map',
+             output='screen', parameters=[cfg('coverage_map.yaml'), use_sim_time]),
+
+        Node(package='lawnbot_nav', executable='blade_controller', name='blade_controller',
+             output='screen', parameters=[cfg('blade_controller.yaml'), use_sim_time]),
+
+        Node(package='lawnbot_nav', executable='vision_stub', name='vision_stub', output='screen',
+             condition=IfCondition(LaunchConfiguration('use_vision_stub'))),
 
         Node(package='lawnbot_nav', executable='safety_gate', name='safety_gate',
              output='screen', parameters=[cfg('safety_gate.yaml'), use_sim_time]),
