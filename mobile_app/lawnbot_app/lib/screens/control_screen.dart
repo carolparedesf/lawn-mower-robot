@@ -69,6 +69,7 @@ class _ControlScreenState extends State<ControlScreen> {
         ? LatLng(robotPos.lat, robotPos.lng)
         : _defaultCenter;
     final isAutonomous = status.isAutonomous;
+    final isConnected = context.watch<ConnectionProvider>().isConnected;
 
     if (_followRobot && robotPos != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -80,14 +81,13 @@ class _ControlScreenState extends State<ControlScreen> {
       children: [
         RoboTopBar(onSettingsTap: widget.onSettingsTap),
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
             child: Column(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(24),
-                  child: SizedBox(
-                    height: 260,
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
                     child: Stack(
                       children: [
                         FlutterMap(
@@ -126,21 +126,9 @@ class _ControlScreenState extends State<ControlScreen> {
                                     point: LatLng(robotPos.lat, robotPos.lng),
                                     width: 36,
                                     height: 36,
-                                    child: Transform.rotate(
-                                      angle: robotPos.heading * math.pi / 180,
-                                      child: Container(
-                                        decoration: const BoxDecoration(
-                                          color: RoboColors.amberAccent,
-                                          shape: BoxShape.circle,
-                                          border: Border.fromBorderSide(
-                                            BorderSide(
-                                                color: Colors.white,
-                                                width: 3),
-                                          ),
-                                        ),
-                                        child: const Icon(Icons.navigation,
-                                            color: Colors.white, size: 18),
-                                      ),
+                                    child: _RobotMarker(
+                                      isConnected: isConnected,
+                                      headingDegrees: robotPos.heading,
                                     ),
                                   ),
                                 ],
@@ -169,7 +157,7 @@ class _ControlScreenState extends State<ControlScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 14, vertical: 10),
@@ -227,7 +215,7 @@ class _ControlScreenState extends State<ControlScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
@@ -257,39 +245,76 @@ class _ControlScreenState extends State<ControlScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 SizedBox(
-                  height: 138,
+                  height: 108,
                   child: Center(
                     child: _useDpad
                         ? const DpadWidget()
                         : const JoystickWidget(),
                   ),
                 ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _toggleAutonomous(isAutonomous),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isAutonomous
-                          ? RoboColors.error
-                          : RoboColors.amberAccent,
-                      shadowColor: (isAutonomous
-                              ? RoboColors.error
-                              : RoboColors.amberAccent)
-                          .withValues(alpha: 0.4),
-                    ),
-                    child: Text(isAutonomous
-                        ? '⏸ Detener modo autónomo'
-                        : '▶ Iniciar modo autónomo'),
-                  ),
-                ),
               ],
             ),
           ),
         ),
+        // Fixed outside any scroll view so it's always reachable without
+        // scrolling, regardless of how tall the content above ends up being.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => _toggleAutonomous(isAutonomous),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isAutonomous
+                    ? RoboColors.error
+                    : RoboColors.amberAccent,
+                shadowColor: (isAutonomous
+                        ? RoboColors.error
+                        : RoboColors.amberAccent)
+                    .withValues(alpha: 0.4),
+              ),
+              child: Text(isAutonomous
+                  ? '⏸ Detener modo autónomo'
+                  : '▶ Iniciar modo autónomo'),
+            ),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+/// Robot position marker: 🤖 emoji on a highlighted badge while connected,
+/// a dimmed neutral icon otherwise. Rotates with `hdg` to hint heading.
+class _RobotMarker extends StatelessWidget {
+  final bool isConnected;
+  final double headingDegrees;
+
+  const _RobotMarker({
+    required this.isConnected,
+    required this.headingDegrees,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Transform.rotate(
+      angle: headingDegrees * math.pi / 180,
+      child: Container(
+        decoration: BoxDecoration(
+          color: isConnected ? RoboColors.amberAccent : Colors.grey.shade400,
+          shape: BoxShape.circle,
+          border: const Border.fromBorderSide(
+            BorderSide(color: Colors.white, width: 3),
+          ),
+        ),
+        child: Center(
+          child: isConnected
+              ? const Text('🤖', style: TextStyle(fontSize: 18))
+              : const Icon(Icons.navigation, color: Colors.white, size: 18),
+        ),
+      ),
     );
   }
 }

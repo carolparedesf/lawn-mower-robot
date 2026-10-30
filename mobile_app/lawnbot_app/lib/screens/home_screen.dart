@@ -49,7 +49,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       body: SafeArea(child: body),
-      bottomNavigationBar: RoboBottomNav(active: _tab, onTap: _onNavigate),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: RoboBottomNav(active: _tab, onTap: _onNavigate),
+      ),
     );
   }
 

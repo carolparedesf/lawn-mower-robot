@@ -81,7 +81,7 @@ class _JoystickWidgetState extends State<JoystickWidget> {
           listener: _onMove,
           onStickDragEnd: _onEnd,
           base: JoystickBase(
-            size: 118,
+            size: 96,
             color: Colors.white,
             withBorderCircle: false,
             arrowsColor: RoboColors.primaryGreen.withValues(alpha: 0.4),
@@ -94,7 +94,7 @@ class _JoystickWidgetState extends State<JoystickWidget> {
             ],
           ),
           stick: JoystickStick(
-            size: 52,
+            size: 44,
             color: RoboColors.primaryGreen,
             shadowColor: RoboColors.primaryGreen.withValues(alpha: 0.5),
           ),
