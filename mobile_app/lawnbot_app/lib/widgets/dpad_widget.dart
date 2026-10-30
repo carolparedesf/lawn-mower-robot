@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -28,8 +29,8 @@ class DpadWidget extends StatelessWidget {
       child: IgnorePointer(
         ignoring: !enabled,
         child: SizedBox(
-          width: 138,
-          height: 138,
+          width: 108,
+          height: 108,
           child: GridView.count(
             crossAxisCount: 3,
             mainAxisSpacing: 6,
@@ -58,7 +59,7 @@ class DpadWidget extends StatelessWidget {
   }
 }
 
-class _DpadButton extends StatelessWidget {
+class _DpadButton extends StatefulWidget {
   final String label;
   final String dir;
   final void Function(String dir, double speed) onPublish;
@@ -70,11 +71,40 @@ class _DpadButton extends StatelessWidget {
   });
 
   @override
+  State<_DpadButton> createState() => _DpadButtonState();
+}
+
+class _DpadButtonState extends State<_DpadButton> {
+  Timer? _repeat;
+
+  void _start() {
+    widget.onPublish(widget.dir, _dpadSpeed);
+    // El ESP32 corta el movimiento si no recibe un cmd_vel nuevo en 500ms
+    // (CMD_WATCHDOG_MS en firmware/src/main.cpp) — hay que seguir
+    // mandando el comando mientras el botón esté presionado.
+    _repeat = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      widget.onPublish(widget.dir, _dpadSpeed);
+    });
+  }
+
+  void _stop() {
+    _repeat?.cancel();
+    _repeat = null;
+    widget.onPublish('stop', 0.0);
+  }
+
+  @override
+  void dispose() {
+    _repeat?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => onPublish(dir, _dpadSpeed),
-      onTapUp: (_) => onPublish('stop', 0.0),
-      onTapCancel: () => onPublish('stop', 0.0),
+      onTapDown: (_) => _start(),
+      onTapUp: (_) => _stop(),
+      onTapCancel: _stop,
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: RoboColors.primaryGreen,
@@ -82,7 +112,7 @@ class _DpadButton extends StatelessWidget {
         ),
         child: Center(
           child: Text(
-            label,
+            widget.label,
             style: const TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w800,
