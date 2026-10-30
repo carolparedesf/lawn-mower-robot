@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import '../providers/connection_provider.dart';
 import '../providers/geofence_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
@@ -9,6 +10,7 @@ import '../models/geofence.dart';
 import '../widgets/coverage_overlay.dart';
 import '../widgets/geofence_notices.dart';
 import '../widgets/geofence_toolbar.dart';
+import '../widgets/robot_marker.dart';
 import '../widgets/robo_top_bar.dart';
 
 const LatLng _defaultCenter = LatLng(-25.2867, -57.6470);
@@ -33,6 +35,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
     final geofence = context.watch<GeofenceProvider>();
     final robotState = context.watch<RobotStateProvider>();
     final robotPos = robotState.currentPosition;
+    final isConnected = context.watch<ConnectionProvider>().isConnected;
     final center = robotPos != null
         ? LatLng(robotPos.lat, robotPos.lng)
         : _defaultCenter;
@@ -114,6 +117,21 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                             ),
                           ],
                         ),
+                      if (robotPos != null)
+                        MarkerLayer(
+                          key: const Key('robot_marker_layer'),
+                          markers: [
+                            Marker(
+                              point: LatLng(robotPos.lat, robotPos.lng),
+                              width: 36,
+                              height: 36,
+                              child: RobotMarker(
+                                isConnected: isConnected,
+                                headingDegrees: robotPos.heading,
+                              ),
+                            ),
+                          ],
+                        ),
                       MarkerLayer(
                         markers: [
                           for (var i = 0; i < geofence.points.length; i++)
@@ -184,6 +202,27 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                     left: 0,
                     right: 0,
                     child: Center(child: GeofenceToolbar()),
+                  ),
+                  Positioned(
+                    right: 12,
+                    bottom: 76,
+                    child: FloatingActionButton.small(
+                      key: const Key('center_on_robot'),
+                      heroTag: 'center_on_robot',
+                      tooltip: 'Centrar en el robot',
+                      backgroundColor: Colors.white,
+                      foregroundColor: RoboColors.darkGreen,
+                      onPressed: robotPos == null
+                          ? () => ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                      'Todavía no hay posición del robot'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              )
+                          : () => _mapController.move(center, 19),
+                      child: const Icon(Icons.my_location),
+                    ),
                   ),
                 ],
               ),
