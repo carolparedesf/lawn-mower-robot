@@ -25,6 +25,7 @@ import threading
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # actuator_relay.py va junto a este archivo
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
@@ -297,8 +298,8 @@ def main():
     bridge = RobotBridge()
     try:
         rclpy.spin(bridge)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass          # Ctrl+C o SIGTERM de systemd: apagado normal
     finally:
         bridge.requested_mode = "idle"
         bridge.relay.clear()
@@ -306,7 +307,7 @@ def main():
         bridge.send_stop()
         bridge.publish_mode()
         bridge.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()      # el contexto ya puede estar cerrado por la senal
 
 if __name__ == "__main__":
     main()
