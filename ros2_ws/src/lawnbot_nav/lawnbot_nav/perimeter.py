@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Seguimiento de borde en /cmd_vel_perimeter. Solo actua con el modo activo auto_perimeter.
 
-Mantiene la distancia a la pared con el sonar del lado elegido y usa el bumper lateral (B3 izquierda,
-B4 derecha) como contacto. Esquinas interiores: gira en el lugar; exteriores: busqueda acotada. Si
-pierde la pared o se traba, se detiene y avisa por /nav/alert_in (perimeter_lost, perimeter_blocked,
-perimeter_misconfigured). La salida pasa por twist_mux y safety_gate.
+Modo base: por contacto con el bumper lateral (B3 izquierda, B4 derecha). Al tocar retrocede derecho un
+poco y se aleja girando. El sonar lateral es un refinamiento opcional (use_side_sonar) que solo se usa con
+side_sonar_angle_deg valido. Si pierde el borde o se traba, se detiene y avisa por /nav/alert_in
+(perimeter_lost, perimeter_blocked). La salida pasa por twist_mux y safety_gate.
 """
 import time
+from dataclasses import fields
 
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
@@ -29,14 +30,7 @@ LATCHED = QoSProfile(
 MODE = 'auto_perimeter'
 MODE_STALE_S = 3.0
 
-PARAM_FIELDS = (
-    'side', 'linear', 'max_angular', 'target_distance', 'kp', 'side_sonar_angle_deg', 'use_side_sonar',
-    'max_range', 'lost_distance', 'obstacle_distance', 'contact_turn', 'contact_back_speed',
-    'contact_back_time_s', 'contact_away_time_s', 'contact_away_linear', 'seek_turn',
-    'corner_turn_speed', 'corner_clear_ratio', 'corner_timeout_s', 'lost_timeout_s',
-    'bump_lost_timeout_s', 'sonar_forward_offset', 'outer_corner_extra', 'contact_timeout_s',
-    'search_arc_time_s', 'search_arc_linear', 'search_arc_turn', 'search_forward_time_s',
-    'search_timeout_s')
+PARAM_FIELDS = tuple(f.name for f in fields(PerimeterParams))
 
 
 class Perimeter(Node):
@@ -56,6 +50,10 @@ class Perimeter(Node):
         if params.side not in ('left', 'right'):
             raise ValueError("side debe ser 'left' o 'right'")
         self.core = PerimeterCore(params)
+        if params.use_side_sonar and not self.core.sonar_enabled:
+            self.get_logger().warn(
+                f'use_side_sonar con side_sonar_angle_deg={params.side_sonar_angle_deg} (minimo 20): '
+                'se ignora el sonar lateral y se sigue por bumper')
         self.sensor_timeout = gp('sensor_timeout').value
         self.side_sonar = f'sonar/{params.side}'
         self.side_bumper = 'bumper/B3_left' if params.side == 'left' else 'bumper/B4_right'
@@ -97,8 +95,9 @@ class Perimeter(Node):
 
     def build_inputs(self, now):
         t = self.sensor_timeout
-        use_sonar = self.core.p.use_side_sonar
-        needed = ['sonar/center'] + ([self.side_sonar] if use_sonar else [])
+        use_sonar = self.core.sonar_enabled
+        needed = (['sonar/center'] if self.core.p.use_center_sonar else []) + \
+                 ([self.side_sonar] if use_sonar else [])
         sonar_ok = all(self.cache.get(n, now, t) is not None for n in needed)
         return PerimeterInputs(
             sensors_ok=sonar_ok and self.cache.fresh(BUMPER_FRONT, now, t),

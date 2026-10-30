@@ -5,7 +5,7 @@ import random
 import tempfile
 import unittest
 
-from lawnbot_nav.geofence_logic import (Hysteresis, distance_to_boundary, drop_closing_vertex,
+from lawnbot_nav.geofence_logic import (Hysteresis, distance_to_boundary, drop_closing_vertex, polygon_centroid,
                                         lat_lon_to_local_xy, load_geofence, parse_geofence_json,
                                         point_in_polygon, save_geofence, segments_intersect,
                                         signed_area, signed_distance, validate_polygon)
@@ -123,6 +123,14 @@ class GeometryTests(unittest.TestCase):
 
     def test_distancia_a_un_punto_degenerado(self):
         self.assertAlmostEqual(distance_to_boundary((3, 4), [(0, 0), (0, 0), (0, 0)]), 5.0)
+
+    def test_centroide(self):
+        self.assertEqual(polygon_centroid(self.poly), (5.0, 5.0))
+        ele, _ = validate_polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
+        cx, cy = polygon_centroid(ele)
+        self.assertAlmostEqual(cx, cy)                                  # la L es simetrica respecto de y = x
+        self.assertAlmostEqual(cx, 3.875)
+        self.assertEqual(polygon_centroid([(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)]), (2.0, 0.0))   # degenerado
 
     def test_conversion_local(self):
         x, y = lat_lon_to_local_xy(-25.3, -57.6, -25.3, -57.6)

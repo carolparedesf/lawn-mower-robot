@@ -501,7 +501,7 @@ def run_random_and_perimeter():
 
     def set_mode(name):
         st['mode'], st['last_mode'] = name, int(R.MONO['t'])
-        for n in nodes:
+        for n in nodes + (gate,):
             n.subs['nav/active_mode'](R.String(name))
 
     def new_msgs(pub, key):
@@ -554,6 +554,10 @@ def run_random_and_perimeter():
         r = robot_node.robot
         xy.append((r.x, r.y))
         st['min_gap'] = min(st['min_gap'], robot_node.world.distance((r.x, r.y)))
+        if os.environ.get('DEBUG6') and int(t * 50) % 250 == 0:
+            g = gate.pubs['cmd_vel'].last
+            print(f'   t={t - 1000:7.1f} pos=({r.x:.2f},{r.y:.2f},{r.yaw:.2f}) pm={pm.core.state:13s} mode={pm.active_mode} gate=({g.linear.x:.2f},{g.angular.z:.2f}) '
+                  f'alert={gate.pubs["nav/safety_alert"].last.data if gate.pubs.get("nav/safety_alert") and gate.pubs["nav/safety_alert"].last else None}')
 
     def run(seconds):
         for _ in range(int(seconds / 0.02)):
@@ -573,6 +577,11 @@ def run_random_and_perimeter():
     check(any(m.data == 'random:geofence_not_ready' for m in rw.pubs['nav/alert_in'].sent), '   avisa geofence_not_ready por /nav/alert_in')
 
     st['fence'] = True
+    rw.subs['geofence/polygon'](_polygon(fence))
+    step()
+    ang = rw.interior_angle()
+    check(ang is not None and abs(ang - math.pi / 4) < 0.02,
+          f'con el cerco y la pose, calcula el giro hacia el centroide: {math.degrees(ang):.0f} grados (esperado 45)')
     n0 = count(rw, 'cmd_vel_random')
     start_bumpers = st['bumper_presses']
     run(300.0)
@@ -600,9 +609,9 @@ def run_random_and_perimeter():
     run(150.0)
     check(count(rw, 'cmd_vel_random') == n_rw, 'random_walk no publica mas')
     path_len = sum(math.dist(a, b) for a, b in zip(xy, xy[1:]))
-    check(path_len > 15.0, f'perimeter avanza siguiendo el borde: {path_len:.1f} m recorridos')
+    check(path_len > 12.0, f'perimeter avanza siguiendo el borde: {path_len:.1f} m recorridos')
     check(st['min_gap'] > 0.03, f'sin choques (distancia minima {st["min_gap"]:.2f} m)')
-    check(st['bumper_presses'] - start_bumpers <= 2, f'bumpers presionados: {st["bumper_presses"] - start_bumpers}')
+    check(st['bumper_presses'] - start_bumpers >= 3, f'modo base por bumper: {st["bumper_presses"] - start_bumpers} contactos con la pared')
     check(pm.pubs['cmd_vel_perimeter'].last is not None and max(abs(m.linear.x) for m in pm.pubs['cmd_vel_perimeter'].sent) <= 0.15 + 1e-9,
           'velocidad lineal de perimeter <= 0,15 m/s')
 
@@ -615,8 +624,9 @@ def run_random_and_perimeter():
     check(all(m.linear.x == 0 for m in rw.pubs['cmd_vel_random'].sent[-5:] + pm.pubs['cmd_vel_perimeter'].sent[-5:]),
           'shutdown: ambos publican cero')
 
-    # sonar lateral mal orientado: se niega a arrancar y avisa
-    bad = make(Perimeter, **dict(pm_cfg, side_sonar_angle_deg=0.0))
+    # sonar lateral pedido con un angulo invalido: se ignora y se sigue por bumper (no falla)
+    bad = make(Perimeter, **dict(pm_cfg, use_side_sonar=True, side_sonar_angle_deg=0.0))
+    check(bad.get_logger().has('se ignora el sonar lateral', 'WARN'), 'use_side_sonar con 0 grados: avisa que se ignora el sonar lateral')
     bad.subs['nav/active_mode'](R.String('auto_perimeter'))
     for s_ in ('left', 'center', 'right'):
         bad.subs[f'sonar/{s_}'](R.Range(1.5))
@@ -624,9 +634,85 @@ def run_random_and_perimeter():
         bad.subs[b_](R.Bool(False))
     R.advance(0.1)
     bad.timer(0.05)()
-    check(bad.pubs['cmd_vel_perimeter'].last.linear.x == 0.0 and
-          bad.pubs['nav/alert_in'].last.data == 'perimeter:perimeter_misconfigured',
-          'sonar lateral a 0 grados: no arranca y avisa perimeter_misconfigured')
+    check(bad.pubs['cmd_vel_perimeter'].last.linear.x == 0.15 and not bad.core.sonar_enabled,
+          '   y sigue funcionando por bumper')
+
+
+def run_gate_perimeter():
+    print('\n[7] safety_gate: umbrales por sonar e ignorar los laterales solo en auto_perimeter')
+    import yaml
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'safety_gate.yaml')))['safety_gate']['ros__parameters']
+
+    def build(**over):
+        g = make(SafetyGate, **dict(cfg, **over))
+        tick = g.timer(0.05)
+        state = {'left': 1.5, 'center': 1.5, 'right': 1.5, 'front': False, 'mode': None, 'mode_pub': True}
+
+        def run(seconds, publish=('left', 'center', 'right')):
+            for _ in range(int(seconds / 0.05)):
+                R.advance(0.05)
+                for s_ in publish:
+                    g.subs[f'sonar/{s_}'](R.Range(state[s_]))
+                for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+                    g.subs[b_](R.Bool(state['front']))
+                if state['mode'] and state['mode_pub'] and int(R.MONO['t'] * 20) % 20 == 0:
+                    g.subs['nav/active_mode'](R.String(state['mode']))
+                g.subs['cmd_vel_mux'](_twist(0.2, 0.0))
+                tick()
+            return g.pubs['cmd_vel'].last.linear.x
+        return g, state, run
+
+    g, st, run = build()
+    st['left'] = 0.05
+    check(run(1.0) == 0.0, 'sin modo: un sonar lateral a 0,05 m frena (todos cuentan)')
+    st['mode'] = 'auto_perimeter'
+    check(run(1.5) == 0.2, 'auto_perimeter: el lateral a 0,05 m ya no frena')
+    st['right'] = 0.05
+    check(run(1.0) == 0.2, '   ni el derecho')
+    st['center'] = 0.10
+    check(run(1.0) == 0.0, '   pero el central a 0,10 m sigue parando')
+    st['center'] = 1.5
+    st['front'] = True
+    check(run(1.0) == 0.0, '   y el bumper frontal tambien')
+    st['front'] = False
+    check(run(1.0) == 0.2, '   sin esos, el avance pasa entero (nunca se amplifica: 0,2 -> 0,2)')
+    check(max(m.linear.x for m in g.pubs['cmd_vel'].sent) <= 0.2 + 1e-12, '   ninguna orden supera la pedida')
+    check(run(1.0, publish=('center',)) == 0.2, '   los laterales sin datos no bloquean mientras se ignoran')
+    check(run(1.5, publish=('left', 'right')) == 0.0, '   pero el central sin datos si bloquea (falla segura)')
+
+    st['mode'] = 'auto_random'
+    run(0.5)
+    check(run(1.5) == 0.0, 'auto_random: el lateral a 0,05 m vuelve a frenar')
+    st['mode'] = 'auto_perimeter'
+    st['mode_pub'] = True
+    run(2.0)
+    check(run(0.5) == 0.2, 'de vuelta en auto_perimeter se ignoran otra vez')
+    st['mode_pub'] = False                                   # el modo deja de renovarse
+    R.advance(4.0)
+    check(run(1.0) == 0.0, 'sin un modo vigente (3 s) se vuelven a considerar todos los sonares')
+
+    g2, st2, run2 = build(ignore_side_sonars_in_perimeter=False)
+    st2['mode'] = 'auto_perimeter'
+    st2['left'] = 0.05
+    check(run2(2.0) == 0.0, 'con ignore_side_sonars_in_perimeter: false el lateral frena tambien en auto_perimeter')
+
+    # umbrales por sonar: el izquierdo para recien a 0,05 m; el central conserva 0,30 / 0,15
+    g3, st3, run3 = build(sonar_left_slow_distance=0.10, sonar_left_stop_distance=0.05)
+    st3['left'] = 0.12
+    check(run3(1.0) == 0.2, 'umbral propio del sonar izquierdo (0,10 / 0,05): a 0,12 m no frena')
+    st3['left'] = 0.07
+    v = run3(1.0)
+    check(0.0 < v < 0.2, f'   a 0,07 m frena parcialmente ({v:.2f} m/s)')
+    st3['left'] = 1.5
+    st3['center'] = 0.10
+    check(run3(1.0) == 0.0, '   y el central sigue con sus 0,30 / 0,15')
+
+
+def _twist(v, w):
+    t = R.Twist() if hasattr(R, 'Twist') else None
+    t.linear.x, t.angular.z = v, w
+    return t
 
 
 FENCE = [(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]
@@ -652,4 +738,5 @@ if __name__ == '__main__':
     run_gate_alerts()
     run_coverage()
     run_random_and_perimeter()
+    run_gate_perimeter()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
