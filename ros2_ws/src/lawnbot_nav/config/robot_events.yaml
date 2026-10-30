@@ -1,0 +1,12 @@
+robot_events:
+  ros__parameters:
+    rate_hz: 10.0
+    input_timeout: 1.0            # s: bumpers y /cutter/cmd mas viejos que esto no cuentan
+    mode_timeout: 3.0
+    battery_timeout: 5.0
+    battery_min_valid_v: 1.0
+    low_battery_threshold: 20.0   # % (CONSERVADOR; ajustar con la curva real del pack)
+    low_battery_margin: 5.0       # % : rearma el aviso solo al superar umbral + margen
+    low_battery_samples: 3        # lecturas consecutivas bajo el umbral antes de avisar
+    low_battery_repeat_s: 0.0     # 0 = un solo aviso; >0 = recordatorio cada tanto mientras siga baja
+    lift_hold_s: 3.0

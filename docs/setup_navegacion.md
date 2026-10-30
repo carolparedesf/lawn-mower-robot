@@ -465,6 +465,25 @@ espacio libre delante del eco la baja) y **certeza por cámara** (`/vision/obsta
    Simular cada condición: `/estop` `true`, `/geofence/inside` fuera del cerco, dos bumpers `true` a la vez (B3 y B4), un `Imu` inclinado, o cortar un publicador (dato viejo).
    Ver el mapa por MQTT: `mosquitto_sub -t robot/map -C 1`.
 
+## Eventos del robot (`robot_events`)
+
+El nodo `robot_events` (`config/robot_events.yaml`, arranca con `nav.launch.py`) publica en **`/robot/events`** (`std_msgs/String`, QoS reliable, volátil) el **nombre del evento**, una sola vez por cambio (flanco):
+
+| Evento | Cuándo |
+|---|---|
+| `lifted` | dos bumpers opuestos a la vez (B3+B4, B1+B5, B2+B5); un levantado = un evento aunque los bumpers reboten (`lift_hold_s` 3 s) |
+| `cutting_started` | `/cutter/cmd` o `/trimmer/cmd` pasan de 0 a > 0 (motor realmente pedido, no solo el pedido de la app) |
+| `navigation_started` | el modo activo pasa a `auto_parallel` o `auto_random` desde otro modo (parallel <-> random no repite) |
+| `perimeter_started` | el modo activo pasa a `auto_perimeter` |
+| `low_battery` | batería < `low_battery_threshold` (20 %) en `low_battery_samples` (3) lecturas seguidas |
+
+`low_battery` tiene histéresis: avisa **una vez** y solo se rearma al subir a umbral + `low_battery_margin` (25 %); con `low_battery_repeat_s` > 0 hay recordatorio periódico (0 = no).
+Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer dato tras arrancar el nodo no genera eventos (reiniciar no dispara nada falso).
+
+- **App:** el bridge pone el evento en `robot/status.alert` durante 5 s, **solo si no hay una alerta de seguridad** (`/nav/safety_alert` manda). Contrato intacto. `bridge/status_alert.py` hay que copiarlo a la Pi junto a `bridge.py`.
+- **Buzzer (quien lo maneje):** suscribirse a `/robot/events` (`ros2 topic echo /robot/events`) y mapear cada nombre a un patrón de sonido. **No se tocó el firmware**: hoy el firmware no escucha este topic.
+- Pruebas sin ROS: `PYTHONPATH=. python3 test/test_events.py`, `python3 bridge/test_status_alert.py` y el escenario [10] de `tools/node_scenarios.py`.
+
 ## Pendientes
 
 - **App Flutter:** exigir 4 puntos para enviar un cerco (hoy permite 3 y el nodo los rechaza).
