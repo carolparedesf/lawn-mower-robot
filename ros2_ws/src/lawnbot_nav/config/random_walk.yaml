@@ -13,8 +13,17 @@ random_walk:
     turn_speed: 0.6                # rad/s
     turn_min_deg: 60.0             # giro al azar entre estos angulos tras un obstaculo o bumper
     turn_max_deg: 180.0
-    edge_turn_min_deg: 120.0       # tras el borde del cerco se gira mas para alejarse
+    # Tras el borde del cerco el giro apunta al CENTROIDE del cerco (necesita /geofence/polygon y la pose en
+    # frame_id) con esta variacion al azar; sin ellos gira entre edge_turn_min_deg y edge_turn_max_deg
+    edge_turn_spread_deg: 30.0
+    edge_turn_min_deg: 120.0
     edge_turn_max_deg: 180.0
+    edge_hard_distance: 0.5        # m: por debajo el borde dispara siempre; entre este y edge_distance solo si se acerca
+    edge_trend_window_s: 1.0
+    edge_trend_eps: 0.1
+    frame_id: map
+    base_frame: base_footprint
+    pose_timeout: 0.5
     obstacle_distance: 0.50        # m (sonar minimo) que dispara el retroceso
     edge_distance: 1.5             # m al borde del cerco que dispara el retroceso (mayor que el error del GPS)
     require_geofence: true         # sin /geofence/status OK y distancia vigente no se mueve (alerta geofence_not_ready)

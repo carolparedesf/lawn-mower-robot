@@ -15,7 +15,8 @@ from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
 from lawnbot_nav.safety_logic import (SafetyParams, SafetyState,
-                                      apply_safety, merge_alerts, parse_alert_in)
+                                      apply_safety, ignored_sonars, merge_alerts,
+                                      parse_alert_in)
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -42,6 +43,12 @@ class SafetyGate(Node):
         for s in SONARS:
             self.declare_parameter(f'sonar_{s}_enabled', True)
             self.declare_parameter(f'sonar_{s}_topic', f'sonar/{s}')
+            # Umbrales propios de cada sonar; negativo = usar los globales
+            self.declare_parameter(f'sonar_{s}_slow_distance', -1.0)
+            self.declare_parameter(f'sonar_{s}_stop_distance', -1.0)
+        # En auto_perimeter los sonares laterales no cuentan (el central y los bumpers siguen protegiendo)
+        self.declare_parameter('ignore_side_sonars_in_perimeter', True)
+        self.declare_parameter('mode_timeout', 3.0)
         self.declare_parameter('bumper_front_topics',
                                ['bumper/B1_front_left', 'bumper/B2_front_right'])
         self.declare_parameter('bumper_back_topics', ['bumper/B5_back'])
@@ -54,6 +61,18 @@ class SafetyGate(Node):
             sonar_stop_distance=gp('sonar_stop_distance').value,
             max_linear=gp('max_linear').value,
             max_angular=gp('max_angular').value)
+        for s in SONARS:
+            slow = gp(f'sonar_{s}_slow_distance').value
+            stop = gp(f'sonar_{s}_stop_distance').value
+            if slow >= 0.0 or stop >= 0.0:
+                self.params.sonar_thresholds[s] = (
+                    slow if slow >= 0.0 else self.params.sonar_slow_distance,
+                    stop if stop >= 0.0 else self.params.sonar_stop_distance)
+        self.ignore_sides = gp('ignore_side_sonars_in_perimeter').value
+        self.mode_timeout = gp('mode_timeout').value
+        self.active_mode = None
+        self.mode_time = 0.0
+        self.ignoring = ()
         self.input_timeout = gp('input_timeout').value
         self.sensor_timeout = gp('sensor_timeout').value
         self.alert_ttl = gp('alert_ttl').value
@@ -83,6 +102,7 @@ class SafetyGate(Node):
 
         self.create_subscription(Twist, gp('input_topic').value, self.on_input, 10)
         self.create_subscription(String, 'nav/alert_in', self.on_alert_in, 10)
+        self.create_subscription(String, 'nav/active_mode', self.on_mode, LATCHED)
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/safety_alert', LATCHED)
 
@@ -101,6 +121,10 @@ class SafetyGate(Node):
         self.v_in = msg.linear.x
         self.w_in = msg.angular.z
         self.last_in = time.monotonic()
+
+    def on_mode(self, msg):
+        self.active_mode = msg.data
+        self.mode_time = time.monotonic()
 
     def on_alert_in(self, msg):
         source, alert = parse_alert_in(msg.data)
@@ -121,14 +145,20 @@ class SafetyGate(Node):
         return entry is not None and now - entry[1] <= self.sensor_timeout
 
     def build_state(self, now):
-        ranges = []
+        ranges = {}
         stale = False
+        ignoring = ignored_sonars(self.ignore_sides, self.active_mode,
+                                  now - self.mode_time <= self.mode_timeout)
+        if ignoring != self.ignoring:
+            self.ignoring = ignoring
+            self.get_logger().info(
+                f'sonares ignorados: {list(ignoring)}' if ignoring else 'se vuelven a considerar todos los sonares')
         for s in SONARS:
-            if not self.sonar_enabled[s]:
+            if not self.sonar_enabled[s] or s in ignoring:
                 continue
             entry = self.sonar.get(s)
             if self.fresh(entry, now):
-                ranges.append(entry[0])
+                ranges[s] = entry[0]
             else:
                 stale = True
 

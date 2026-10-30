@@ -1,10 +1,15 @@
-"""Seguimiento de borde (pared, cerca, cantero) con el sonar y el bumper del lado elegido. Sin ROS.
+"""Seguimiento de borde (pared, cerca, cantero) por contacto con el bumper lateral. Sin ROS.
 
-El sonar del lado de la pared mide la distancia lateral (con su angulo de montaje) y un control
-proporcional la mantiene en `target_distance`. El bumper lateral es contacto: si toca, se aleja.
-Una esquina interior (obstaculo al frente) se resuelve girando en el lugar hacia el lado contrario
-de la pared; una esquina exterior (la pared desaparece) con una busqueda acotada: arco hacia la pared
-y tramo recto, por un tiempo maximo. Si no la reencuentra, FAILED y alerta.
+Modo base (bumper): avanza con una curva suave hacia la pared hasta tocarla. Al tocar, RETROCEDE derecho
+un poco (para que la cola no barra la pared al girar) y despues gira en el lugar alejandose un angulo
+fijo; luego vuelve a buscar el contacto. Asi avanza zigzagueando pegado al borde.
+
+Refinamiento opcional (`use_side_sonar`, solo con `side_sonar_angle_deg` valido): el sonar del lado de la
+pared mide la distancia lateral y un control proporcional la mantiene, con el bumper como contacto de
+respaldo. Si el angulo no es valido, el sonar se ignora y se sigue por bumper.
+
+Esquina interior: el sonar central o el bumper frontal disparan el giro. Esquina exterior / contacto
+perdido: busqueda acotada y, si falla, FAILED con alerta.
 """
 import math
 from dataclasses import dataclass
@@ -16,7 +21,11 @@ FOLLOW = 'FOLLOW'
 CORNER = 'CORNER'
 CONTACT_BACK = 'CONTACT_BACK'
 CONTACT_TURN = 'CONTACT_TURN'
+CONTACT_FWD = 'CONTACT_FWD'
+UNSTICK = 'UNSTICK'
 FAILED = 'FAILED'
+
+MIN_SONAR_ANGLE_DEG = 20.0
 
 
 @dataclass
@@ -24,27 +33,47 @@ class PerimeterParams:
     side: str = 'right'                  # lado de la pared: 'left' o 'right'
     linear: float = 0.15                 # m/s
     max_angular: float = 0.5             # rad/s
+
+    # ── Contacto con el bumper (modo base) ──
+    seek_turn: float = 0.3               # rad/s: curva hacia la pared mientras no hay contacto
+    contact_back_speed: float = 0.10     # m/s: retroceso recto al tocar (la cola no barre la pared)
+    contact_back_distance: float = 0.10  # m
+    contact_turn_angle_deg: float = 15.0         # giro en el lugar para alejarse tras un contacto lateral
+    front_contact_turn_angle_deg: float = 45.0   # idem tras un contacto frontal (esquina interior)
+    contact_turn_speed: float = 0.5      # rad/s
+    # Si al girar el bumper sigue presionado (la cola roza la pared), avanza un poco en vez de empujar
+    contact_unwedge_after_s: float = 1.0
+    contact_forward_speed: float = 0.08  # m/s
+    contact_forward_time_s: float = 1.5
+    contact_timeout_s: float = 6.0       # contacto continuo por mas de esto = bloqueado
+    bump_lost_timeout_s: float = 10.0    # sin contacto por mas de esto = contacto perdido -> busqueda
+
+    # Si queda trabado (contacto continuo o esquina que no libera), retrocede en arco alejandose de la pared
+    # para ganar espacio de giro; tras `unstick_attempts` intentos sin salir, FAILED (perimeter_blocked)
+    unstick_attempts: int = 2
+    unstick_speed: float = 0.10          # m/s hacia atras
+    unstick_turn: float = 0.4            # rad/s del arco
+    unstick_time_s: float = 2.5
+
+    # ── Sonar central (esquina interior anticipada) ──
+    use_center_sonar: bool = True
+    obstacle_distance: float = 0.45
+    corner_turn_speed: float = 0.6
+    corner_clear_ratio: float = 1.3
+    corner_timeout_s: float = 8.0
+
+    # ── Refinamiento opcional con el sonar lateral ──
+    use_side_sonar: bool = False
+    side_sonar_angle_deg: float = 45.0   # angulo del sonar lateral respecto del frente (0 = mira al frente)
     target_distance: float = 0.30        # m, distancia lateral sonar-pared
     kp: float = 1.5                      # rad/s por metro de error
-    side_sonar_angle_deg: float = 45.0   # angulo del sonar lateral respecto del frente (0 = mira al frente)
-    use_side_sonar: bool = True          # False: solo contacto con el bumper lateral
     max_range: float = 1.5               # lectura del sonar sin eco
     lost_distance: float = 0.9           # pared mas lejos que esto = perdida
-    obstacle_distance: float = 0.45      # frente (sonar central) que dispara la esquina interior
-    contact_turn: float = 0.5            # rad/s para separarse al tocar el bumper
-    contact_back_speed: float = 0.1      # m/s: primero retrocede derecho, porque girar pegado a la pared
-    contact_back_time_s: float = 0.8     # barre las esquinas del cuerpo contra ella
-    contact_away_time_s: float = 1.2     # despues se aleja girando
-    contact_away_linear: float = 0.08
-    seek_turn: float = 0.15              # rad/s hacia la pared cuando solo se usa el bumper
-    corner_turn_speed: float = 0.6
-    corner_clear_ratio: float = 1.3      # el frente se considera libre por encima de obstacle_distance * ratio
-    corner_timeout_s: float = 8.0
-    lost_timeout_s: float = 0.6          # minimo sin pared ni contacto antes de buscar
+    lost_timeout_s: float = 0.6
     sonar_forward_offset: float = 0.19   # m, el sonar esta adelante del centro de giro
     outer_corner_extra: float = 0.10     # m de avance extra antes de rodear una esquina exterior
-    contact_timeout_s: float = 6.0       # contacto continuo con el bumper lateral por mas de esto = bloqueado
-    bump_lost_timeout_s: float = 3.0     # idem, en modo solo-bumper
+
+    # ── Busqueda acotada ──
     search_arc_time_s: float = 4.0
     search_arc_linear: float = 0.1
     search_arc_turn: float = 0.4
@@ -68,6 +97,11 @@ class PerimeterCore:
         self.sign = 1.0 if params.side == 'left' else -1.0      # +1: la pared esta a la izquierda
         self.reset(0.0)
 
+    @property
+    def sonar_enabled(self) -> bool:
+        """El sonar lateral solo se usa si se pidio y su angulo de montaje es valido."""
+        return self.p.use_side_sonar and self.p.side_sonar_angle_deg >= MIN_SONAR_ANGLE_DEG
+
     def reset(self, now: float) -> None:
         self.state = SEARCH_FORWARD
         self.alert: Optional[str] = None
@@ -76,14 +110,12 @@ class PerimeterCore:
         self.search_since = now
         self.search_first = 'forward'        # al empezar: derecho; al perder la pared: arco
         self.lost_since: Optional[float] = None
+        self.last_contact = now
         self.last_lateral = self.p.target_distance
         self.contact_since: Optional[float] = None
+        self.contact_kind = 'side'
+        self.unstick_count = 0
         self.lateral: Optional[float] = None
-
-    def config_error(self) -> Optional[str]:
-        if self.p.use_side_sonar and self.p.side_sonar_angle_deg < 20.0:
-            return 'perimeter_misconfigured'
-        return None
 
     # ── Ciclo ────────────────────────────────────────────────
 
@@ -91,9 +123,6 @@ class PerimeterCore:
         """Devuelve (v, w). `self.alert` queda con la alerta vigente."""
         p = self.p
         self.alert = None
-        err = self.config_error()
-        if err:
-            return self._fail(err, now)
         if self.state == FAILED:
             self.alert = self.fail_reason
             return 0.0, 0.0
@@ -105,17 +134,55 @@ class PerimeterCore:
         wall = self.lateral is not None and self.lateral < p.lost_distance
         if wall:
             self.last_lateral = self.lateral
-        contact = inp.side_bumper
+        contact = inp.side_bumper or inp.front_bumper
         if contact:
+            self.last_contact = now
             if self.contact_since is None:
                 self.contact_since = now
-            elif now - self.contact_since > p.contact_timeout_s:
-                return self._fail('perimeter_blocked', now)
+            elif now - self.contact_since > p.contact_timeout_s and self.state != UNSTICK:
+                return self._stuck(now)
         else:
             self.contact_since = None
-        front_blocked = inp.front_bumper or (
-            inp.center_range is not None and inp.center_range < p.obstacle_distance)
 
+        if self.state == UNSTICK:
+            if now - self.state_since >= p.unstick_time_s or inp.back_bumper:
+                self._set(FOLLOW, now)
+                self.contact_since = None
+                self.lost_since = None
+                self.last_contact = now
+            else:
+                return -p.unstick_speed, self.sign * p.unstick_turn
+
+        # Retroceso y giro tras un contacto
+        if self.state == CONTACT_BACK:
+            back_time = p.contact_back_distance / p.contact_back_speed
+            if now - self.state_since >= back_time or inp.back_bumper:
+                self._set(CONTACT_TURN, now)
+            else:
+                return -p.contact_back_speed, 0.0
+        if self.state == CONTACT_TURN:
+            angle = (p.front_contact_turn_angle_deg if self.contact_kind == 'front'
+                     else p.contact_turn_angle_deg)
+            if now - self.state_since >= math.radians(angle) / p.contact_turn_speed:
+                self._set(FOLLOW, now)
+                self.lost_since = None
+                self.last_contact = now
+            elif (contact or inp.back_bumper) and now - self.state_since >= p.contact_unwedge_after_s:
+                self._set(CONTACT_FWD, now)
+                return p.contact_forward_speed, 0.0
+            else:
+                return 0.0, -self.sign * p.contact_turn_speed
+        if self.state == CONTACT_FWD:
+            if now - self.state_since >= p.contact_forward_time_s:
+                self._set(FOLLOW, now)
+                self.lost_since = None
+                self.last_contact = now
+            else:
+                return p.contact_forward_speed, 0.0
+
+        # Esquina interior detectada por el sonar central, antes de tocar
+        center_blocked = (p.use_center_sonar and inp.center_range is not None
+                          and inp.center_range < p.obstacle_distance)
         if self.state == CORNER:
             clear = (not inp.front_bumper and (inp.center_range is None or
                                                 inp.center_range > p.obstacle_distance * p.corner_clear_ratio))
@@ -123,73 +190,82 @@ class PerimeterCore:
                 self._set(FOLLOW, now)
                 self.lost_since = None
             elif now - self.state_since > p.corner_timeout_s:
-                return self._fail('perimeter_blocked', now)
+                return self._stuck(now)
             else:
                 return 0.0, -self.sign * p.corner_turn_speed
-
-        if self.state == CONTACT_BACK:
-            if now - self.state_since >= p.contact_back_time_s or inp.back_bumper:
-                self._set(CONTACT_TURN, now)
-            else:
-                return -p.contact_back_speed, 0.0
-        if self.state == CONTACT_TURN:
-            if now - self.state_since >= p.contact_away_time_s:
-                self._set(FOLLOW, now)
-                self.lost_since = None
-            else:
-                return p.contact_away_linear, -self.sign * p.contact_turn
-
-        if front_blocked and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
+        elif center_blocked and not contact and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
+            self.last_contact = now                       # una pared al frente tambien cuenta como borde encontrado
             self._set(CORNER, now)
             return 0.0, -self.sign * p.corner_turn_speed
 
+        # Contacto: retrocede y se aleja. Si toca la cola (bumper trasero) no se puede retroceder:
+        # al reves, se avanza para liberarla.
+        if (contact or inp.back_bumper) and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
+            self.contact_kind = 'front' if inp.front_bumper else 'side'
+            if inp.back_bumper:
+                self._set(CONTACT_FWD, now)
+                return p.contact_forward_speed, 0.0
+            self._set(CONTACT_BACK, now)
+            return -p.contact_back_speed, 0.0
+
+        # Busqueda: se sale al encontrar la pared (por contacto ya se atendio arriba)
         if self.state in (SEARCH_FORWARD, SEARCH_ARC):
-            if wall or contact:
+            if wall:
                 self._set(FOLLOW, now)
                 self.lost_since = None
             else:
                 return self._search(now)
 
         # FOLLOW
-        if wall or contact:
-            self.lost_since = None
-        else:
-            if self.lost_since is None:
-                self.lost_since = now
-            if now - self.lost_since >= self._lost_limit():
-                self.search_first = 'arc'
-                self.search_since = now
-                self._set(SEARCH_ARC, now)
-                return self._search(now)
-
-        if contact:
-            self._set(CONTACT_BACK, now)
-            return -p.contact_back_speed, 0.0
-        if self.lateral is not None and p.use_side_sonar:
-            error = self.lateral - p.target_distance
-            w = max(-p.max_angular, min(p.max_angular, self.sign * p.kp * error))
-            v = p.linear * max(0.4, 1.0 - 0.6 * abs(w) / p.max_angular)
-            return v, w
-        # Sin sonar lateral util: se busca el contacto con una curva suave hacia la pared
-        return p.linear, self.sign * p.seek_turn
+        if self.state == FOLLOW and self.unstick_count and now - self.state_since > 20.0:
+            self.unstick_count = 0                        # 20 s en FOLLOW sin trabarse: se renuevan los intentos
+        if self.sonar_enabled:
+            if wall:
+                self.lost_since = None
+            else:
+                if self.lost_since is None:
+                    self.lost_since = now
+                if now - self.lost_since >= self._lost_limit():
+                    return self._start_search(now)
+            if self.lateral is not None and wall:
+                error = self.lateral - p.target_distance
+                w = max(-p.max_angular, min(p.max_angular, self.sign * p.kp * error))
+                v = p.linear * max(0.4, 1.0 - 0.6 * abs(w) / p.max_angular)
+                return v, w
+            return p.linear, 0.0                      # esquina exterior: sigue derecho hasta rodearla
+        if now - self.last_contact >= p.bump_lost_timeout_s:
+            return self._start_search(now)
+        return p.linear, self.sign * p.seek_turn       # curva suave hacia la pared hasta tocarla
 
     # ── Internos ─────────────────────────────────────────────
 
+    def _stuck(self, now: float):
+        """Trabado: intenta liberarse retrocediendo en arco; si ya lo intento varias veces, se rinde."""
+        if self.unstick_count >= self.p.unstick_attempts:
+            return self._fail('perimeter_blocked', now)
+        self.unstick_count += 1
+        self._set(UNSTICK, now)
+        return -self.p.unstick_speed, self.sign * self.p.unstick_turn
+
+    def _start_search(self, now: float):
+        self.search_first = 'arc'
+        self.search_since = now
+        self._set(SEARCH_ARC, now)
+        return self._search(now)
+
     def _lost_limit(self) -> float:
-        """Tiempo que se sigue derecho tras perder la pared antes de rodear la esquina.
+        """Tiempo que se sigue derecho tras perder la pared antes de rodear la esquina (solo con sonar).
 
         El sonar lateral apunta hacia adelante: ve el final de la pared `lateral / tan(angulo)` antes de
         llegar a la esquina, y esta adelantado respecto del centro de giro.
         """
         p = self.p
-        if not p.use_side_sonar:
-            return p.bump_lost_timeout_s
         ahead = self.last_lateral / math.tan(math.radians(p.side_sonar_angle_deg)) \
             + p.sonar_forward_offset + p.outer_corner_extra
         return max(p.lost_timeout_s, ahead / p.linear)
 
     def _lateral(self, inp: PerimeterInputs) -> Optional[float]:
-        if not self.p.use_side_sonar or inp.side_range is None:
+        if not self.sonar_enabled or inp.side_range is None:
             return None
         if inp.side_range >= self.p.max_range * 0.98:
             return None                                        # sin eco

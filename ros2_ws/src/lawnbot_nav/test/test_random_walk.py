@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from lawnbot_nav.geofence_logic import signed_distance
+from lawnbot_nav.geofence_logic import polygon_centroid, signed_distance
 from lawnbot_nav.random_walk_logic import (BACKUP, BLOCKED, FORWARD, TURN, RandomWalkCore,
                                            RandomWalkInputs, RandomWalkParams)
 from lawnbot_nav.sim_robot import SimRobot
@@ -11,14 +11,21 @@ DT = 0.05
 SENSOR_DT = 0.2        # el firmware publica sonares y bumpers a 5 Hz
 
 
+def wrap(a):
+    return math.atan2(math.sin(a), math.cos(a))
+
+
 def simulate(world, params, seed, tmax=600.0, start=(5.0, 4.0, 0.0), fence=None,
-             use_sonar=True, tau=0.1):
+             use_sonar=True, tau=0.1, use_centroid=False):
     core = RandomWalkCore(params, seed)
+    centroid = polygon_centroid(fence) if fence and use_centroid else None
     robot = SimRobot(*start, tau=tau)
     t, next_sensor = 0.0, 0.0
     sonar_min, bumpers = 1.5, {}
     log = {'xy': [], 'collisions': 0, 'bumper_presses': 0, 'v': [], 'w': [], 'states': set(),
-           'reasons': set(), 'alerts': set(), 'edge_min': math.inf}
+           'reasons': set(), 'alerts': set(), 'edge_min': math.inf, 'edge_turn_errors': [],
+           'edge_trigger_times': []}
+    prev_state, prev_reason = FORWARD, ''
     while t < tmax:
         if t >= next_sensor:
             pose = (robot.x, robot.y, robot.yaw)
@@ -32,8 +39,16 @@ def simulate(world, params, seed, tmax=600.0, start=(5.0, 4.0, 0.0), fence=None,
             front_bumper=bumpers.get('bumper/B1_front_left', False) or bumpers.get('bumper/B2_front_right', False),
             side_bumper=bumpers.get('bumper/B3_left', False) or bumpers.get('bumper/B4_right', False),
             back_bumper=bumpers.get('bumper/B5_back', False),
-            edge_distance=edge, geofence_ok=fence is not None)
+            edge_distance=edge, geofence_ok=fence is not None,
+            interior_angle=(wrap(math.atan2(centroid[1] - robot.y, centroid[0] - robot.x) - robot.yaw)
+                            if centroid else None))
         v, w = core.update(inp, t)
+        if core.state == BACKUP and prev_state == FORWARD and core.reason == 'edge':
+            log['edge_trigger_times'].append(t)
+        if prev_state == TURN and core.state == FORWARD and prev_reason == 'edge' and centroid:
+            # al terminar un giro por borde: error de rumbo respecto del centroide
+            log['edge_turn_errors'].append(abs(wrap(math.atan2(centroid[1] - robot.y, centroid[0] - robot.x) - robot.yaw)))
+        prev_state, prev_reason = core.state, core.reason
         log['collisions'] += world.step_robot(robot, v, w, DT)
         log['xy'].append((robot.x, robot.y))
         log['v'].append(v)
@@ -128,6 +143,35 @@ class WalkTests(unittest.TestCase):
         self.assertIsNotNone(fired)
         self.assertGreater(fired, 0.5)
 
+    def test_giro_por_borde_apunta_al_interior_del_cerco(self):
+        fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+        world = SimWorld.room(10.0, 8.0)
+        params = RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.5, edge_turn_spread_deg=30.0)
+        errors = []
+        for seed in range(1, 6):
+            log = simulate(world, params, seed, tmax=500.0, start=(5.0, 4.0, 0.0), fence=fence,
+                           use_centroid=True)[2]
+            errors += log['edge_turn_errors']
+            self.assertGreater(log['edge_min'], 0.0)
+        self.assertGreater(len(errors), 15)
+        # tras el giro mira al centroide dentro de la variacion pedida (mas lo que gira durante el giro por tiempo)
+        self.assertLess(max(errors), math.radians(30.0 + 12.0))
+        self.assertGreater(max(errors), math.radians(5.0))               # y hay variacion, no apunta siempre exacto
+
+    def test_apuntar_al_centroide_reduce_los_disparos_por_borde(self):
+        # Mismo cerco, mismas semillas: girar hacia el interior evita volver a chocar con el borde
+        fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+        world = SimWorld.room(10.0, 8.0)
+        params = RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.4, obstacle_distance=0.3)
+
+        def edge_triggers(use_centroid):
+            return sum(len(simulate(world, params, seed, tmax=500.0, fence=fence,
+                                    use_centroid=use_centroid)[2]['edge_trigger_times'])
+                       for seed in range(1, 7))
+
+        with_centroid, at_random = edge_triggers(True), edge_triggers(False)
+        self.assertLess(with_centroid, at_random * 0.85, (with_centroid, at_random))
+
     def test_solo_bumpers_cuando_los_sonares_no_ven(self):
         params = RandomWalkParams(require_geofence=False)
         core, robot, log = simulate(room_with_obstacles(), params, seed=2, tmax=300.0, use_sonar=False)
@@ -168,6 +212,52 @@ class WalkTests(unittest.TestCase):
         self.assertEqual(core.state, BACKUP)
         v, w = core.update(RandomWalkInputs(sonar_min=0.2, sensors_ok=True, back_bumper=True), 0.1)
         self.assertEqual((core.state, v), (TURN, 0.0))
+
+    def edge_turn(self, interior, seed=1, spread=30.0):
+        params = RandomWalkParams(require_geofence=False, edge_turn_spread_deg=spread, edge_distance=1.5,
+                                  edge_hard_distance=0.5)
+        core = RandomWalkCore(params, seed)
+        inp = RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.2, geofence_ok=True,
+                               interior_angle=interior)
+        core.update(inp, 0.0)                                       # FORWARD -> BACKUP por el borde
+        self.assertEqual((core.state, core.reason), (BACKUP, 'edge'))
+        v, w = core.update(inp, 10.0)                               # termina el retroceso -> TURN
+        self.assertEqual(core.state, TURN)
+        return core, w
+
+    def test_giro_por_borde_hacia_el_angulo_interior_con_variacion(self):
+        for interior in (1.2, -2.5, 0.1, 3.0):
+            for seed in range(25):
+                core, w = self.edge_turn(interior, seed)
+                spread = math.radians(30.0)
+                self.assertTrue(interior - spread - 1e-9 <= core.last_turn_angle <= interior + spread + 1e-9,
+                                (interior, core.last_turn_angle))
+                self.assertEqual(w > 0, core.last_turn_angle >= 0)             # el sentido sigue al angulo
+                duration = abs(core.last_turn_angle) / 0.6
+                self.assertAlmostEqual(core.until - 10.0, duration, places=6)
+
+    def test_sin_variacion_apunta_exacto(self):
+        core, w = self.edge_turn(1.0, spread=0.0)
+        self.assertAlmostEqual(core.last_turn_angle, 1.0)
+        self.assertGreater(w, 0.0)
+
+    def test_la_variacion_depende_de_la_semilla(self):
+        angles = {round(self.edge_turn(1.0, seed)[0].last_turn_angle, 6) for seed in range(20)}
+        self.assertGreater(len(angles), 10)
+        self.assertEqual(self.edge_turn(1.0, 3)[0].last_turn_angle, self.edge_turn(1.0, 3)[0].last_turn_angle)
+
+    def test_sin_angulo_interior_gira_como_antes(self):
+        for seed in range(20):
+            core, _ = self.edge_turn(None, seed)
+            self.assertTrue(math.radians(120.0) - 1e-9 <= abs(core.last_turn_angle) <= math.radians(180.0) + 1e-9)
+
+    def test_los_otros_disparos_no_usan_el_angulo_interior(self):
+        params = RandomWalkParams(require_geofence=False, turn_min_deg=60.0, turn_max_deg=90.0)
+        core = RandomWalkCore(params, seed=2)
+        inp = RandomWalkInputs(sonar_min=0.2, sensors_ok=True, interior_angle=0.0)      # obstaculo, no borde
+        core.update(inp, 0.0)
+        core.update(inp, 10.0)
+        self.assertTrue(math.radians(60.0) <= abs(core.last_turn_angle) <= math.radians(90.0))
 
     def test_giros_dentro_del_rango_configurado(self):
         params = RandomWalkParams(require_geofence=False, turn_min_deg=90.0, turn_max_deg=135.0)

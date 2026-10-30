@@ -2,34 +2,49 @@ perimeter:
   ros__parameters:
     rate_hz: 20.0
     sensor_timeout: 1.0
-    side: right                    # lado de la pared: left | right (bumper B3 / B4 y sonar lateral de ese lado)
+    side: right                    # lado de la pared: left | right (bumper B3 / B4 de ese lado)
     linear: 0.15                   # m/s
     max_angular: 0.5               # rad/s
-    target_distance: 0.30          # m, distancia lateral sonar-pared (no menos: el gate frena con un sonar < 0,30 m)
-    kp: 1.5
-    # IMPORTANTE: en el URDF los tres sonares miran al frente (rpy 0). El seguimiento por distancia
-    # necesita el angulo real de montaje del sonar lateral respecto del frente del robot (90 = de costado).
-    # Con menos de 20 grados el nodo se niega a arrancar (perimeter_misconfigured). PROVISORIO: medirlo.
-    side_sonar_angle_deg: 45.0
-    use_side_sonar: true           # false: solo contacto con el bumper lateral (respaldo; puede trabarse)
-    max_range: 1.5
-    lost_distance: 0.9
-    obstacle_distance: 0.45        # sonar central: esquina interior
-    contact_turn: 0.5
-    contact_back_speed: 0.1
-    contact_back_time_s: 0.8
-    contact_away_time_s: 1.2
-    contact_away_linear: 0.08
-    seek_turn: 0.15
+
+    # ── Modo base: contacto con el bumper lateral ──
+    seek_turn: 0.3                 # rad/s: curva hacia la pared mientras no hay contacto
+    contact_back_speed: 0.10       # m/s: al tocar, retrocede derecho antes de girar (la cola no barre la pared)
+    contact_back_distance: 0.10    # m de retroceso
+    contact_turn_angle_deg: 15.0   # giro en el lugar para alejarse tras un contacto lateral
+    front_contact_turn_angle_deg: 45.0   # idem tras un contacto frontal (esquina interior)
+    contact_turn_speed: 0.5        # rad/s
+    contact_unwedge_after_s: 1.0   # si al girar el bumper sigue presionado (la cola roza), avanza un poco
+    contact_forward_speed: 0.08
+    contact_forward_time_s: 1.5
+    contact_timeout_s: 6.0         # contacto continuo por mas de esto = trabado
+    unstick_attempts: 2            # intentos de liberarse (retroceso en arco) antes de perimeter_blocked
+    unstick_speed: 0.10
+    unstick_turn: 0.4
+    unstick_time_s: 2.5
+    bump_lost_timeout_s: 10.0      # sin contacto por mas de esto = borde perdido -> busqueda acotada
+
+    # ── Sonar central: esquina interior anticipada ──
+    use_center_sonar: true
+    obstacle_distance: 0.45
     corner_turn_speed: 0.6
     corner_clear_ratio: 1.3
     corner_timeout_s: 8.0
+
+    # ── Refinamiento opcional: sonar lateral ──
+    use_side_sonar: false          # solo se usa si ademas side_sonar_angle_deg es valido (>= 20)
+    # En el URDF los tres sonares miran al frente (rpy 0). Para medir la distancia a una pared que corre al
+    # costado hace falta el angulo REAL de montaje respecto del frente (90 = de costado). PROVISORIO: medirlo.
+    side_sonar_angle_deg: 45.0
+    target_distance: 0.30          # m (no menos: el gate frena con un sonar < 0,30 m salvo que se lo ignore)
+    kp: 1.5
+    max_range: 1.5
+    lost_distance: 0.9
     lost_timeout_s: 0.6
-    bump_lost_timeout_s: 3.0
     sonar_forward_offset: 0.19
     outer_corner_extra: 0.10
-    contact_timeout_s: 6.0         # contacto continuo con el bumper lateral = bloqueado (perimeter_blocked)
-    search_arc_time_s: 4.0         # busqueda al perder la pared: arco hacia ella y tramo recto
+
+    # ── Busqueda acotada al perder el borde ──
+    search_arc_time_s: 4.0
     search_arc_linear: 0.1
     search_arc_turn: 0.4
     search_forward_time_s: 3.0

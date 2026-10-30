@@ -4,7 +4,7 @@ Solo se limita o anula: ningun factor supera 1 ni invierte el signo de la orden.
 """
 import math
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List, Tuple, Union
 
 ALERT_NONE = 'none'
 ALERT_SENSOR_TIMEOUT = 'sensor_timeout'
@@ -22,18 +22,30 @@ ALERT_PRIORITY = (
 )
 
 
+# Sonares que pueden ignorarse en auto_perimeter. El central y los bumpers nunca.
+SIDE_SONARS = ('left', 'right')
+PERIMETER_MODE = 'auto_perimeter'
+
+
 @dataclass
 class SafetyParams:
     sonar_slow_distance: float = 0.30
     sonar_stop_distance: float = 0.15
     max_linear: float = 0.5
     max_angular: float = 1.5
+    # Umbrales propios por sonar: nombre -> (slow, stop). Los que falten usan los globales.
+    sonar_thresholds: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+
+    def thresholds(self, name) -> Tuple[float, float]:
+        slow, stop = self.sonar_thresholds.get(name, (self.sonar_slow_distance, self.sonar_stop_distance))
+        return slow, max(stop, 0.0)
 
 
 @dataclass
 class SafetyState:
-    # Distancias [m] de los sonares habilitados con dato reciente (NaN = lectura invalida)
-    sonar_ranges: List[float] = field(default_factory=list)
+    # Distancias [m] de los sonares habilitados con dato reciente (NaN = lectura invalida): lista
+    # (umbrales globales) o {nombre: distancia} (umbrales por sonar)
+    sonar_ranges: Union[List[float], Dict[str, float]] = field(default_factory=list)
     front_pressed: bool = False
     back_pressed: bool = False
     # Algun sensor requerido (sonar habilitado o bumper frontal) sin datos recientes
@@ -63,13 +75,17 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams):
     v = clamp_magnitude(v, params.max_linear)
     w = clamp_magnitude(w, params.max_angular)
 
-    valid = [d for d in state.sonar_ranges if not math.isnan(d)]
-    min_range = min(valid) if valid else None
-
+    readings = (list(state.sonar_ranges.items()) if isinstance(state.sonar_ranges, dict)
+                else [(None, d) for d in state.sonar_ranges])
     forward_factor = 1.0
-    if min_range is not None:
-        forward_factor = sonar_scale(
-            min_range, params.sonar_slow_distance, params.sonar_stop_distance)
+    stop_hit = near_hit = False
+    for name, distance in readings:
+        if math.isnan(distance):
+            continue
+        slow, stop = params.thresholds(name)
+        forward_factor = min(forward_factor, sonar_scale(distance, slow, stop))
+        stop_hit = stop_hit or distance <= stop
+        near_hit = near_hit or distance < slow
     if state.front_pressed or state.stale:
         forward_factor = 0.0
 
@@ -88,13 +104,21 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams):
         alert = ALERT_BUMPER_FRONT
     elif state.back_pressed:
         alert = ALERT_BUMPER_BACK
-    elif min_range is not None and min_range <= params.sonar_stop_distance:
+    elif stop_hit:
         alert = ALERT_OBSTACLE_STOP
-    elif min_range is not None and min_range < params.sonar_slow_distance:
+    elif near_hit:
         alert = ALERT_OBSTACLE_NEAR
     else:
         alert = ALERT_NONE
     return v, w, alert
+
+
+def ignored_sonars(ignore_sides: bool, mode, mode_fresh: bool) -> Tuple[str, ...]:
+    """Sonares que no cuentan en este momento: solo los laterales, solo en auto_perimeter y solo si el
+    modo es vigente. El sonar central nunca se ignora."""
+    if ignore_sides and mode_fresh and mode == PERIMETER_MODE:
+        return SIDE_SONARS
+    return ()
 
 
 def parse_alert_in(text: str):

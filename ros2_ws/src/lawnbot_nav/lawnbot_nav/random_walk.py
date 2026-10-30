@@ -5,20 +5,25 @@ AVANZAR -> (obstaculo por sonar, bumper o borde del cerco) -> RETROCEDER -> GIRA
 Publica a 20 Hz mientras el modo esta activo y cero al desactivarse o apagarse. La salida pasa por
 twist_mux y safety_gate: este nodo nunca publica en /cmd_vel.
 """
+import math
 import time
+from dataclasses import fields
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PolygonStamped, Twist
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, Float32, String
+from tf2_ros import Buffer, TransformListener
 
+from lawnbot_nav.geofence_logic import polygon_centroid
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.random_walk_logic import (RandomWalkCore, RandomWalkInputs,
                                            RandomWalkParams)
 from lawnbot_nav.sensor_cache import (BUMPER_BACK, BUMPER_FRONT, SONARS,
                                       SensorCache)
+from lawnbot_nav.tf_utils import lookup_pose
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -41,21 +46,27 @@ class RandomWalk(Node):
         d('output_topic', 'cmd_vel_random')
         for s in SONARS:
             d(f'sonar_{s}_enabled', True)
+        d('frame_id', 'map')                   # frame del cerco, para girar hacia su centroide
+        d('base_frame', 'base_footprint')
+        d('pose_timeout', 0.5)
         defaults = RandomWalkParams()
-        for field in ('linear', 'backup_speed', 'backup_distance', 'turn_speed', 'turn_min_deg',
-                      'turn_max_deg', 'edge_turn_min_deg', 'edge_turn_max_deg', 'obstacle_distance',
-                      'edge_distance', 'require_geofence', 'stuck_triggers', 'stuck_window_s'):
-            d(field, getattr(defaults, field))
+        names = [f.name for f in fields(RandomWalkParams)]
+        for name in names:
+            d(name, getattr(defaults, name))
 
         gp = self.get_parameter
-        params = RandomWalkParams(**{f: gp(f).value for f in (
-            'linear', 'backup_speed', 'backup_distance', 'turn_speed', 'turn_min_deg', 'turn_max_deg',
-            'edge_turn_min_deg', 'edge_turn_max_deg', 'obstacle_distance', 'edge_distance',
-            'require_geofence', 'stuck_triggers', 'stuck_window_s')})
+        params = RandomWalkParams(**{n: gp(n).value for n in names})
         seed = gp('seed').value
         self.core = RandomWalkCore(params, None if seed < 0 else seed)
         self.sensor_timeout = gp('sensor_timeout').value
         self.sonars = [s for s in SONARS if gp(f'sonar_{s}_enabled').value]
+
+        self.frame_id = gp('frame_id').value
+        self.base_frame = gp('base_frame').value
+        self.pose_timeout = gp('pose_timeout').value
+        self.centroid = None
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.cache = SensorCache()
         self.active_mode = None
@@ -76,6 +87,7 @@ class RandomWalk(Node):
                                      qos_profile_sensor_data)
         self.create_subscription(Float32, 'geofence/distance_to_edge', self.on_edge, 10)
         self.create_subscription(String, 'geofence/status', self.on_geofence_status, LATCHED)
+        self.create_subscription(PolygonStamped, 'geofence/polygon', self.on_polygon, LATCHED)
         self.create_subscription(String, 'nav/active_mode', self.on_mode, LATCHED)
         self.create_timer(1.0 / gp('rate_hz').value, self.tick)
         self.get_logger().info(
@@ -96,9 +108,24 @@ class RandomWalk(Node):
     def on_geofence_status(self, msg):
         self.geofence_ok = msg.data == 'OK'
 
+    def on_polygon(self, msg):
+        points = [(p.x, p.y) for p in msg.polygon.points]
+        frame_ok = (not msg.header.frame_id) or msg.header.frame_id == self.frame_id
+        self.centroid = polygon_centroid(points) if len(points) >= 3 and frame_ok else None
+
     def on_mode(self, msg):
         self.active_mode = msg.data
         self.mode_time = time.monotonic()
+
+    def interior_angle(self):
+        """Giro que deja al robot mirando al centroide del cerco, o None si falta el cerco o la pose."""
+        if self.centroid is None:
+            return None
+        pose = lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame, self.pose_timeout)
+        if pose is None:
+            return None
+        heading = math.atan2(self.centroid[1] - pose.y, self.centroid[0] - pose.x)
+        return math.atan2(math.sin(heading - pose.yaw), math.cos(heading - pose.yaw))
 
     # ── Ciclo ────────────────────────────────────────────────
 
@@ -117,7 +144,8 @@ class RandomWalk(Node):
             front_bumper=self.cache.pressed(BUMPER_FRONT, now, t),
             side_bumper=self.cache.pressed(SIDE_BUMPERS, now, t),
             back_bumper=self.cache.pressed(BUMPER_BACK, now, t),
-            edge_distance=edge, geofence_ok=self.geofence_ok)
+            edge_distance=edge, geofence_ok=self.geofence_ok,
+            interior_angle=self.interior_angle())
 
     def tick(self):
         now = time.monotonic()

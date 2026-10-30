@@ -2,6 +2,7 @@
 
 Sin ROS. Los giros son por tiempo (sin realimentacion de rumbo): para una caminata al azar alcanza.
 """
+import math
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -21,8 +22,9 @@ class RandomWalkParams:
     turn_speed: float = 0.6             # rad/s
     turn_min_deg: float = 60.0
     turn_max_deg: float = 180.0
-    edge_turn_min_deg: float = 120.0    # al salir de un borde del cerco se gira mas, para alejarse
+    edge_turn_min_deg: float = 120.0    # sin pose/poligono, tras el borde se gira entre estos angulos
     edge_turn_max_deg: float = 180.0
+    edge_turn_spread_deg: float = 30.0  # con pose y cerco: gira hacia el centroide +- esta variacion al azar
     obstacle_distance: float = 0.50     # sonar [m]; por debajo se considera obstaculo
     edge_distance: float = 1.5          # distancia al borde del cerco [m]; mayor que el error del GPS
     edge_hard_distance: float = 0.5     # por debajo de esto el borde dispara siempre, aunque no se acerque
@@ -42,6 +44,8 @@ class RandomWalkInputs:
     back_bumper: bool = False
     edge_distance: Optional[float] = None   # /geofence/distance_to_edge (None si NaN o sin dato)
     geofence_ok: bool = False               # /geofence/status == OK
+    # Giro [rad, positivo = antihorario] que deja al robot mirando al centroide del cerco (None si no se conoce)
+    interior_angle: Optional[float] = None
 
 
 class RandomWalkCore:
@@ -59,6 +63,7 @@ class RandomWalkCore:
         self.triggers = deque()
         self.edge_history = deque()
         self.n_backups = 0
+        self.last_turn_angle = 0.0          # giro elegido en el ultimo GIRAR [rad, con signo]
 
     def update(self, inp: RandomWalkInputs, now: float):
         """Devuelve (v, w). `self.alert` queda con la alerta vigente (None si no hay)."""
@@ -85,7 +90,7 @@ class RandomWalkCore:
             self.reason = reason
             self.n_backups += 1
             if inp.back_bumper:
-                self._start_turn(now)
+                self._start_turn(now, inp)
                 return 0.0, self.turn_sign * p.turn_speed
             self.state = BACKUP
             self.until = now + p.backup_distance / p.backup_speed
@@ -93,7 +98,7 @@ class RandomWalkCore:
 
         if self.state == BACKUP:
             if inp.back_bumper or now >= self.until:
-                self._start_turn(now)
+                self._start_turn(now, inp)
                 return 0.0, self.turn_sign * p.turn_speed
             return -p.backup_speed, 0.0
 
@@ -131,14 +136,22 @@ class RandomWalkCore:
             return True
         return reference is not None and edge < reference - p.edge_trend_eps
 
-    def _start_turn(self, now: float) -> None:
+    def _start_turn(self, now: float, inp: RandomWalkInputs) -> None:
         p = self.p
-        lo, hi = ((p.edge_turn_min_deg, p.edge_turn_max_deg) if self.reason == 'edge'
-                  else (p.turn_min_deg, p.turn_max_deg))
-        angle = self.rng.uniform(lo, hi)
-        self.turn_sign = self.rng.choice((-1.0, 1.0))
+        if self.reason == 'edge' and inp.interior_angle is not None:
+            # Hacia el interior del cerco (centroide), con algo de variacion al azar
+            spread = math.radians(p.edge_turn_spread_deg)
+            angle = inp.interior_angle + self.rng.uniform(-spread, spread)
+            self.turn_sign = 1.0 if angle >= 0.0 else -1.0
+            magnitude = abs(angle)
+        else:
+            lo, hi = ((p.edge_turn_min_deg, p.edge_turn_max_deg) if self.reason == 'edge'
+                      else (p.turn_min_deg, p.turn_max_deg))
+            magnitude = math.radians(self.rng.uniform(lo, hi))
+            self.turn_sign = self.rng.choice((-1.0, 1.0))
+        self.last_turn_angle = self.turn_sign * magnitude
         self.state = TURN
-        self.until = now + (angle * 3.141592653589793 / 180.0) / p.turn_speed
+        self.until = now + magnitude / p.turn_speed
 
     def _block(self, alert: str):
         self.state = BLOCKED

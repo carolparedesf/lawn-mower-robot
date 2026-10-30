@@ -21,6 +21,18 @@ safety_gate:
     sonar_left_enabled: true
     sonar_center_enabled: true
     sonar_right_enabled: true
+    # Umbrales propios de cada sonar [m]; negativo = usar sonar_slow_distance / sonar_stop_distance
+    sonar_left_slow_distance: -1.0
+    sonar_left_stop_distance: -1.0
+    sonar_center_slow_distance: -1.0
+    sonar_center_stop_distance: -1.0
+    sonar_right_slow_distance: -1.0
+    sonar_right_stop_distance: -1.0
+    # En auto_perimeter los sonares LATERALES no cuentan (ni para frenar ni para el dato vigente): seguir una
+    # pared de cerca los dispararia. El sonar central y los bumpers siguen protegiendo siempre. Sin un modo
+    # vigente (mode_timeout) se vuelven a considerar todos.
+    ignore_side_sonars_in_perimeter: true
+    mode_timeout: 3.0
     sonar_left_topic: sonar/left
     sonar_center_topic: sonar/center
     sonar_right_topic: sonar/right

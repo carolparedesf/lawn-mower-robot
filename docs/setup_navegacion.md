@@ -36,6 +36,12 @@ Parámetros: `ros2_ws/src/lawnbot_nav/config/*.yaml` (umbrales, timeouts, sonare
 | Sonar habilitado o bumper frontal sin datos > 1,0 s | avance prohibido (retroceso y giro permitidos) |
 | B3 / B4 | sin efecto (solo se registran en el log) |
 
+**Umbrales por sonar e ignorar los laterales en `auto_perimeter`** (`config/safety_gate.yaml`):
+- `sonar_<left|center|right>_slow_distance` / `_stop_distance`: umbral propio de cada sonar (`-1` = usar los globales 0,30 / 0,15 m). Gana el sonar más restrictivo.
+- `ignore_side_sonars_in_perimeter` (`true`): mientras el modo activo es `auto_perimeter` los sonares **laterales** no frenan ni cuentan para el dato vigente
+  (seguir una pared de cerca los dispararía). **El sonar central y los bumpers siguen protegiendo siempre** (un sonar central sin datos sigue bloqueando el
+  avance). Si el modo deja de ser vigente (`mode_timeout`, 3 s) o es otro, se vuelven a considerar todos. El gate solo limita o anula: nunca amplifica una velocidad.
+
 Alertas (`/nav/safety_alert` → campo `alert` de `robot/status`): `none`, `sensor_timeout`,
 `bumper_front`, `bumper_back`, `obstacle_stop`, `obstacle_near`.
 
@@ -323,7 +329,10 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
 | borde | `/geofence/distance_to_edge` < `edge_distance` (1,5 m) **y** se está acercando, o < `edge_hard_distance` (0,5 m) |
 
 - **Semilla configurable** (`seed`; `-1` = al azar): misma semilla y mismas entradas, misma secuencia de giros.
-- **Giros por tiempo** (sin realimentación de rumbo): entre 60° y 180° tras un obstáculo y entre 120° y 180° tras el borde, para alejarse.
+- **Giros por tiempo** (sin realimentación de rumbo): entre 60° y 180° al azar tras un obstáculo o bumper.
+  **Tras el borde del cerco el giro apunta al centroide del polígono** (`/geofence/polygon` + pose en `map`) con una variación al azar de
+  `±edge_turn_spread_deg` (30°). Sin polígono o sin pose gira entre 120° y 180° como antes. En simulación (cerco de 9 × 7 m) esto reduce los
+  disparos por borde en ~25 % y el robot sale del borde mirando al interior.
 - **Falla segura:** con un sensor requerido sin datos (sonares habilitados o B1/B2) por más de `sensor_timeout`, o sin `/geofence/status` `OK` y
   distancia vigente (`require_geofence: true`), **no se mueve** y avisa (`random:sensor_timeout`, `random:geofence_not_ready`). Con `edge_distance`
   se puede arrancar dentro de la franja del borde: solo dispara si se acerca, así sale hacia adentro en vez de retroceder en bucle.
@@ -332,27 +341,32 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
 
 ### perimeter (`config/perimeter.yaml`)
 
-Sigue una pared o borde físico (`side: right|left`) con el sonar y el bumper de ese lado (B4 / B3).
+Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumper lateral** (B4 / B3). El sonar lateral es un refinamiento opcional.
 
-- **Control:** la distancia lateral es `lectura × sin(side_sonar_angle_deg)` y un control proporcional la mantiene en `target_distance` (0,30 m).
-  El bumper lateral es contacto: al tocar, **retrocede derecho** y luego se aleja girando (girar pegado a la pared barre la cola del robot contra ella).
-- **Esquina interior** (sonar central < 0,45 m o bumper frontal): gira en el lugar hacia el lado contrario de la pared hasta liberar el frente.
-- **Esquina exterior** (la pared termina): sigue derecho el tiempo que adelanta el sonar y luego rodea con un arco hacia la pared.
-- **Pared perdida:** búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s); si no la reencuentra se detiene y avisa
-  `perimeter_lost`. Otros fallos: `perimeter_blocked` (contacto continuo > 6 s o frente que no se libera) y `perimeter_misconfigured`.
-- **`use_side_sonar: false`:** solo contacto con el bumper lateral. Es un respaldo: el diferencial gira sobre su eje y, pegado a la pared, puede
-  trabarse; en ese caso lo declara (`perimeter_blocked`) en vez de empujar para siempre.
-- **IMPORTANTE (a medir en el robot):** en el URDF los tres sonares miran al frente (`rpy 0`). Para medir la distancia a una pared que corre al
-  costado hace falta el **ángulo real de montaje del sonar lateral**: `side_sonar_angle_deg` (45° provisorio; 90° si miran de costado). Con menos de
-  20° el nodo se niega a arrancar (`perimeter_misconfigured`).
-- **Interacción con el gate:** el gate frena el avance con cualquier sonar (mínimo de los tres) por debajo de 0,30 m y lo prohíbe por debajo de 0,15 m.
-  Con el sonar lateral a 45° y la pared a 0,30 m la lectura es de 0,42 m; no se puede seguir una pared más cerca de ~0,21 m sin que el gate frene.
+**Modo base (bumper, `use_side_sonar: false`):**
+1. Avanza con una curva suave hacia la pared (`seek_turn`) hasta tocarla.
+2. Al tocar **retrocede derecho** `contact_back_distance` (0,10 m a `contact_back_speed`) **antes de girar**, para que la cola no barra la pared.
+3. Gira en el lugar alejándose `contact_turn_angle_deg` (15°; `front_contact_turn_angle_deg` = 45° tras un contacto frontal) y vuelve a buscar el contacto.
+4. Si al girar el bumper sigue presionado (la cola roza la pared), **avanza** `contact_forward_time_s` en vez de empujar. Si el contacto es continuo
+   más de `contact_timeout_s`, intenta liberarse con un retroceso en arco (`unstick_*`, hasta `unstick_attempts` veces) y recién después se declara bloqueado.
+- **Esquina interior:** el sonar central (`obstacle_distance`, 0,45 m; se puede apagar con `use_center_sonar: false`) o un bumper frontal disparan el giro.
+- **Borde perdido** (sin contacto por `bump_lost_timeout_s`, 10 s): búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s);
+  si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
+- **Todos los parámetros de contacto están en el YAML** para ajustarlos en el robot (ángulos, distancias, velocidades y tiempos).
+
+**Refinamiento con el sonar lateral (`use_side_sonar: true`):** el sonar del lado de la pared mide la distancia lateral (`lectura × sin(side_sonar_angle_deg)`) y un
+control proporcional la mantiene en `target_distance` (0,30 m), con el bumper como contacto de respaldo; las esquinas exteriores se rodean con un arco. **Solo se
+usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar (queda un aviso en el log) y se sigue por bumper, sin fallar.
+
+- **Limitación (simulación):** con el cuerpo rígido, en una esquina interior pegado a la pared el robot no puede girar sin que la cola roce; el retroceso en arco
+  (`unstick_*`) lo resuelve en el cuarto simulado, pero con paredes reales conviene ajustar `contact_*` y `unstick_*` en el robot.
+- **IMPORTANTE (a medir):** en el URDF los tres sonares miran al frente (`rpy 0`); el ángulo real de montaje del sonar lateral hace falta solo para el refinamiento.
 
 ### Pruebas
 
-1. Sin ROS: `PYTHONPATH=. python3 test/test_sim_world.py test/test_random_walk.py test/test_perimeter.py` (uno por vez). `sim_world.py` es un cuarto simulado
+1. Sin ROS: `PYTHONPATH=. python3 test/test_sim_world.py`, `test_random_walk.py`, `test_perimeter.py` y `test_gate_sonars.py` (uno por vez). `sim_world.py` es un cuarto simulado
    con paredes y obstáculos circulares, sonares (cono de ±7,5°), bumpers por zona del cuerpo y colisiones.
-2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [6]: `fake_robot` en un cuarto, los nodos y el `safety_gate` encadenados).
+2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [6]: `fake_robot` en un cuarto, los nodos y el `safety_gate` encadenados; [7]: umbrales por sonar e ignorar los laterales).
 3. Con ROS y `fake_robot` en un cuarto con paredes y obstáculos:
    ```bash
    ros2 launch lawnbot_nav nav.launch.py
@@ -364,8 +378,8 @@ Sigue una pared o borde físico (`side: right|left`) con el sonar y el bumper de
    `geofence_not_ready`. Para `auto_perimeter`, `'auto_perimeter'` (en `sim_room.yaml` los sonares laterales están a ±45°). Cambiar de modo apaga
    el nodo anterior con ceros. **No correr `ekf_local` ni la odometría real a la vez que `fake_robot`.**
 4. **Resultado en simulación** (cuarto de 10 m × 8 m con un bloque y un obstáculo): `random_walk` recorre ~20 celdas de 1 m en 5 min sin tocar nada
-   y sin salir del cerco; `perimeter` da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque (esquinas exteriores) manteniendo
-   ~0,3 m, y con la pared fuera de alcance se rinde a los 25 s con `perimeter_lost`.
+   y sin salir del cerco; `perimeter` (modo bumper) da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque, y con la pared fuera de alcance
+   se rinde a los 25 s con `perimeter_lost`; con el refinamiento del sonar lateral mantiene ~0,3 m.
 
 ## Pendientes
 

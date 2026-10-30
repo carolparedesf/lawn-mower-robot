@@ -138,6 +138,20 @@ def validate_polygon(points: Sequence[Point], min_vertices: int = 4, min_edge: f
     return pts, None
 
 
+def polygon_centroid(poly: Sequence[Point]) -> Point:
+    """Centroide del area de un poligono simple (si el area es ~0, el promedio de los vertices)."""
+    area = signed_area(poly)
+    n = len(poly)
+    if abs(area) < 1e-9:
+        return (sum(p[0] for p in poly) / n, sum(p[1] for p in poly) / n)
+    cx = cy = 0.0
+    for (x1, y1), (x2, y2) in zip(poly, list(poly[1:]) + [poly[0]]):
+        cross = x1 * y2 - x2 * y1
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+    return (cx / (6.0 * area), cy / (6.0 * area))
+
+
 def point_in_polygon(pt: Point, poly: Sequence[Point]) -> bool:
     """Trazado de rayo; un punto sobre el borde cuenta como adentro."""
     if distance_to_boundary(pt, poly) <= _EPS:
