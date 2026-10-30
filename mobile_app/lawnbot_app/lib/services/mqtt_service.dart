@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import '../config/mqtt_config.dart';
+import '../models/coverage_map.dart';
 import '../models/robot_position.dart';
 import '../models/robot_status.dart';
 
@@ -14,10 +15,12 @@ class MqttService {
 
   final _positionController = StreamController<RobotPosition>.broadcast();
   final _statusController = StreamController<RobotStatus>.broadcast();
+  final _mapController = StreamController<CoverageMapData>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
 
   Stream<RobotPosition> get positionStream => _positionController.stream;
   Stream<RobotStatus> get statusStream => _statusController.stream;
+  Stream<CoverageMapData> get mapStream => _mapController.stream;
   Stream<bool> get connectionStream => _connectionController.stream;
 
   bool _connected = false;
@@ -50,6 +53,8 @@ class MqttService {
 
     _subscribe(MqttConfig.topicPosition, MqttQos.atMostOnce);
     _subscribe(MqttConfig.topicStatus, MqttQos.atLeastOnce);
+    // Retained by the broker: the last map arrives right after subscribing.
+    _subscribe(MqttConfig.topicMap, MqttQos.atMostOnce);
 
     _client.updates!.listen(_onMessage);
     return true;
@@ -80,6 +85,8 @@ class MqttService {
           _positionController.add(RobotPosition.fromJson(json));
         } else if (msg.topic == MqttConfig.topicStatus) {
           _statusController.add(RobotStatus.fromJson(json));
+        } else if (msg.topic == MqttConfig.topicMap) {
+          _mapController.add(CoverageMapData.fromJson(json));
         }
       } catch (_) {}
     }
@@ -98,6 +105,7 @@ class MqttService {
   void dispose() {
     _positionController.close();
     _statusController.close();
+    _mapController.close();
     _connectionController.close();
   }
 }

@@ -10,4 +10,5 @@ class MqttConfig {
 
   static const String topicPosition = 'robot/position';
   static const String topicStatus = 'robot/status';
+  static const String topicMap = 'robot/map';
 }
