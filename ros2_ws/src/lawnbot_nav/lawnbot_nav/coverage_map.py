@@ -49,6 +49,7 @@ class CoverageMap(Node):
         d('sonar_left_yaw_deg', 0.0)           # angulo de montaje de los sonares (el URDF los pone al frente)
         d('sonar_right_yaw_deg', 0.0)
         d('use_sonars', True)
+        d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('frame_id', 'map')
         d('base_frame', 'base_footprint')
         d('pose_timeout', 0.5)
@@ -109,7 +110,7 @@ class CoverageMap(Node):
         self.create_subscription(PoseArray, 'vision/obstacles', self.on_camera, 10)
         if self.use_sonars:
             for s in SONARS:
-                self.create_subscription(Range, f'sonar/{s}', lambda m, s=s: self.on_sonar(s, m),
+                self.create_subscription(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.on_sonar(s, m),
                                          qos_profile_sensor_data)
         self.create_timer(1.0 / gp('pose_rate_hz').value, self.tick)
         self.get_logger().info(f'coverage_map listo (celdas de {self.res} m, cuenta pasadas {"solo cortando" if self.count_only_cutting else "siempre"})')

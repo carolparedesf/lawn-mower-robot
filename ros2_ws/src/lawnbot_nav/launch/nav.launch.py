@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -13,6 +13,11 @@ def generate_launch_description():
     share = get_package_share_directory('lawnbot_nav')
     cfg = lambda name: os.path.join(share, 'config', name)  # noqa: E731
     use_sim_time = {'use_sim_time': LaunchConfiguration('use_sim_time')}
+    # Con use_sonar_filter (por defecto true) sonar_filter publica sonar_filtered/* y los consumidores leen eso;
+    # con false leen sonar/* directo. Si el filtro se cae, los consumidores ven datos viejos y el gate bloquea el avance.
+    use_filter = LaunchConfiguration('use_sonar_filter')
+    sonar_prefix = {'sonar_topic_prefix': ParameterValue(
+        PythonExpression(["'sonar_filtered' if '", use_filter, "'.lower() == 'true' else 'sonar'"]), value_type=str)}
 
     # Cadena: bridge -> /cmd_vel_manual, stubs -> /cmd_vel_<patron>
     #         twist_mux -> /cmd_vel_mux -> safety_gate -> /cmd_vel (unico publicador) -> ESP32
@@ -28,6 +33,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('use_sonar_filter', default_value='true'),
         DeclareLaunchArgument('use_parallel_stub', default_value='false'),
         DeclareLaunchArgument('use_random_stub', default_value='false'),
         DeclareLaunchArgument('use_perimeter_stub', default_value='false'),
@@ -42,6 +48,10 @@ def generate_launch_description():
 
         *stubs,
 
+        Node(package='lawnbot_nav', executable='sonar_filter', name='sonar_filter',
+             output='screen', parameters=[cfg('sonar_filter.yaml'), use_sim_time],
+             condition=IfCondition(use_filter)),
+
         Node(package='twist_mux', executable='twist_mux', name='twist_mux',
              output='screen', parameters=[cfg('twist_mux.yaml'), use_sim_time],
              remappings=[('cmd_vel_out', 'cmd_vel_mux')]),
@@ -53,19 +63,19 @@ def generate_launch_description():
              output='screen', parameters=[cfg('coverage.yaml'), use_sim_time]),
 
         Node(package='lawnbot_nav', executable='random_walk', name='random_walk',
-             output='screen', parameters=[cfg('random_walk.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('random_walk.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='perimeter', name='perimeter',
-             output='screen', parameters=[cfg('perimeter.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('perimeter.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='coverage_map', name='coverage_map',
-             output='screen', parameters=[cfg('coverage_map.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('coverage_map.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='blade_controller', name='blade_controller',
              output='screen', parameters=[cfg('blade_controller.yaml'), use_sim_time]),
 
         Node(package='lawnbot_nav', executable='potential_field', name='potential_field',
-             output='screen', parameters=[cfg('potential_field.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('potential_field.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='robot_events', name='robot_events',
              output='screen', parameters=[cfg('robot_events.yaml'), use_sim_time]),
@@ -76,5 +86,5 @@ def generate_launch_description():
              condition=IfCondition(LaunchConfiguration('use_vision_stub'))),
 
         Node(package='lawnbot_nav', executable='safety_gate', name='safety_gate',
-             output='screen', parameters=[cfg('safety_gate.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('safety_gate.yaml'), sonar_prefix, use_sim_time]),
     ])

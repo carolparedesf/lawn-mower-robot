@@ -1624,6 +1624,33 @@ def run_sonar_filter():
     check(abs(left.last.range - 0.5) < 1e-9 and len(n.pubs['sonar_filtered/right'].sent) == 0, 'cada sonar tiene su propio filtro')
 
 
+def run_sonar_prefix():
+    print('\n[16] consumidores de sonares: leen sonar_filtered/* con sonar_topic_prefix (y sonar/* por defecto)')
+    import yaml
+    from lawnbot_nav.coverage_map import CoverageMap
+    from lawnbot_nav.perimeter import Perimeter
+    from lawnbot_nav.potential_field import PotentialField
+    from lawnbot_nav.random_walk import RandomWalk
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
+    nodes = (('safety_gate', SafetyGate), ('random_walk', RandomWalk), ('perimeter', Perimeter),
+             ('coverage_map', CoverageMap), ('potential_field', PotentialField))
+    for name, cls in nodes:
+        base = load(f'{name}.yaml', name)
+        raw = make(cls, **base)
+        check(all(f'sonar/{s_}' in raw.subs for s_ in ('left', 'center', 'right')) and not any('sonar_filtered' in k for k in raw.subs),
+              f'{name}: por defecto lee sonar/*')
+        filt = make(cls, **dict(base, sonar_topic_prefix='sonar_filtered'))
+        check(all(f'sonar_filtered/{s_}' in filt.subs for s_ in ('left', 'center', 'right')) and not any(k.startswith('sonar/') for k in filt.subs),
+              f'{name}: con sonar_topic_prefix=sonar_filtered lee sonar_filtered/*')
+    own = make(SafetyGate, **dict(load('safety_gate.yaml', 'safety_gate'), sonar_topic_prefix='sonar_filtered', sonar_left_topic='sonar/left'))
+    check('sonar/left' in own.subs and 'sonar_filtered/center' in own.subs, 'safety_gate: un topic propio de un sonar tiene prioridad sobre el prefijo')
+    launch = open(os.path.join(os.path.dirname(HERE), 'launch', 'nav.launch.py')).read()
+    check("DeclareLaunchArgument('use_sonar_filter', default_value='true')" in launch, 'nav.launch.py: use_sonar_filter por defecto true')
+    check(launch.count('sonar_prefix, use_sim_time') == 5 and "executable='sonar_filter'" in launch, '   y el prefijo llega a los cinco consumidores')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1716,4 +1743,5 @@ if __name__ == '__main__':
     run_map_origin()
     run_vision()
     run_sonar_filter()
+    run_sonar_prefix()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

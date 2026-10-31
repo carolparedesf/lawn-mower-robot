@@ -40,6 +40,7 @@ class Perimeter(Node):
         d = self.declare_parameter
         d('rate_hz', 20.0)
         d('sensor_timeout', 1.0)
+        d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('output_topic', 'cmd_vel_perimeter')
         defaults = PerimeterParams()
         for field in PARAM_FIELDS:
@@ -69,7 +70,7 @@ class Perimeter(Node):
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/alert_in', 10)
         for s in SONARS:
-            self.create_subscription(Range, f'sonar/{s}', lambda m, s=s: self.on_sonar(s, m),
+            self.create_subscription(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.on_sonar(s, m),
                                      qos_profile_sensor_data)
         for name in BUMPER_FRONT + ('bumper/B3_left', 'bumper/B4_right', BUMPER_BACK):
             self.create_subscription(Bool, name, lambda m, n=name: self.on_bumper(n, m),

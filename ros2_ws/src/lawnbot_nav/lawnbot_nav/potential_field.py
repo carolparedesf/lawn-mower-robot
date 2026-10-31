@@ -41,6 +41,7 @@ class PotentialField(Node):
         d('vision_topic', 'vision/obstacles')
         d('vision_timeout', 0.5)
         d('sensor_timeout', 1.0)
+        d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('nominal_timeout', 0.5)              # la orden del algoritmo mas vieja que esto no cuenta
         d('nominal_topics_parallel', ['cmd_vel_waypoint', 'cmd_vel_parallel'])
         d('nominal_topics_random', ['cmd_vel_random'])
@@ -87,7 +88,7 @@ class PotentialField(Node):
         self.alert_pub = self.create_publisher(String, 'nav/alert_in', 10)
         self.status_pub = self.create_publisher(String, 'potential_field/status', 10)
         for s in SONARS:
-            self.create_subscription(Range, f'sonar/{s}', lambda m, s=s: self.cache.set(f'sonar/{s}', m.range, time.monotonic()),
+            self.create_subscription(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.cache.set(f'sonar/{s}', m.range, time.monotonic()),
                                      qos_profile_sensor_data)
         for topic in {t for ts in self.topics_by_mode.values() for t in ts}:
             self.create_subscription(Twist, topic, lambda m, t=topic: self.nominal.__setitem__(
