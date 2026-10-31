@@ -36,6 +36,7 @@ setup(
             'vision_stub = lawnbot_nav.vision_stub:main',
             'robot_events = lawnbot_nav.robot_events:main',
             'potential_field = lawnbot_nav.potential_field:main',
+            'sonar_filter = lawnbot_nav.sonar_filter:main',
         ],
     },
 )
