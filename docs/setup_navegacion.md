@@ -32,9 +32,15 @@ Parámetros: `ros2_ws/src/lawnbot_nav/config/*.yaml` (umbrales, timeouts, sonare
 | Bumper frontal (B1 o B2) | prohíbe avance; retroceso y giro pasan |
 | Bumper trasero (B5) | prohíbe retroceso |
 | Sonar: mínimo de los habilitados < 0,30 m | avance proporcional |
-| Sonar: mínimo < 0,15 m | avance prohibido |
+| Sonar: mínimo ≤ 0,15 m | avance prohibido; **se libera recién por encima de 0,20 m** (histéresis `sonar_stop_hysteresis`) |
+| Sonar: el obstáculo se aleja | la velocidad permitida **sube con rampa** (`sonar_release_accel`, 0,5 m/s²) y **baja de inmediato** |
 | Sonar habilitado o bumper frontal sin datos > 1,0 s | avance prohibido (retroceso y giro permitidos) |
 | B3 / B4 | sin efecto (solo se registran en el log) |
+
+**Rampa e histéresis (contra el temblor):** los sonares saltan y la velocidad dependía de la distancia al instante, así que cerca de un umbral el robot "temblaba".
+- **Histéresis del bloqueo total:** entra a `≤ sonar_stop_distance` (0,15 m) y sale a `> stop + sonar_stop_hysteresis` (0,05 → 0,20 m). Cada sonar con su umbral propio tiene su propia banda; un sonar ignorado (laterales en `auto_perimeter`) olvida su bloqueo; una lectura NaN lo conserva.
+- **Rampa de subida:** el factor de avance (0–1) multiplica la orden, así que equivale a una velocidad permitida de `factor × max_linear`. Esa velocidad crece como máximo `sonar_release_accel` (0,5 m/s², `0` = sin rampa) y baja de inmediato. Un bumper o un dato viejo también la ponen en 0, y al liberarse vuelve con rampa.
+- Sigue valiendo: nunca amplifica ni invierte una velocidad, y el retroceso y el giro no dependen de los sonares.
 
 **Umbrales por sonar e ignorar los laterales en `auto_perimeter`** (`config/safety_gate.yaml`):
 - `sonar_<left|center|right>_slow_distance` / `_stop_distance`: umbral propio de cada sonar (`-1` = usar los globales 0,30 / 0,15 m). Gana el sonar más restrictivo.
@@ -70,6 +76,21 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/cmd
 ```bash
 ros2 topic info /cmd_vel -v
 ```
+
+## Filtro de sonares (`sonar_filter`)
+
+Nodo `sonar_filter` (`config/sonar_filter.yaml`): lee `sonar/left|center|right` y publica `sonar_filtered/left|center|right` (`sensor_msgs/Range`, mismo header y stamp que la última lectura). Por sonar:
+- **Lecturas inválidas** (NaN, inf, ≤ 0, menores que `min_range`): no se mezclan ni se publican. Si un sonar deja de dar datos válidos, los consumidores ven el dato viejo y fallan seguro (`sensor_timeout`: el gate bloquea el avance).
+- **`max_range` (sin eco):** no se mezcla con las válidas. Se sigue publicando la mediana vigente y recién tras `max_range_run` (3) seguidas se publica `max_range` (se borra la historia: camino libre).
+- **Saltos:** una lectura a más de `max_jump` (0,5 m) de la mediana se rechaza como espuria; si **la siguiente coincide** con ella (dentro de `max_jump`) se acepta como nivel nuevo (un obstáculo real que aparece de golpe se detecta a la segunda lectura). Tras publicar `max_range`, una lectura baja aislada tampoco pasa sin confirmación.
+- **Mediana** de las últimas `window` (5) lecturas válidas. Para no frenar tarde, si las dos últimas están más de `approach_margin` (0,03 m) por debajo de la mediana (acercamiento sostenido, no ruido) se publica la mayor de las dos.
+
+**Quién lo usa:** `nav.launch.py use_sonar_filter:=true` (por defecto) lanza el filtro y le pone `sonar_topic_prefix: sonar_filtered` a `safety_gate`, `random_walk`, `perimeter`, `coverage_map` y `potential_field`; con `use_sonar_filter:=false` no se lanza el filtro y todos leen `sonar/*` directo. Si el filtro se cae con `true`, los consumidores quedan sin datos y el gate bloquea el avance. Sin el launch, `sonar_topic_prefix` vale `sonar`.
+
+**Costo medido en simulación** (lecturas ruidosas: σ = 3 cm, 6 % de picos hacia abajo, 8 % de pérdidas de eco, sonares a 5 Hz): la desviación de la velocidad de salida baja a ~½ y los cambios de sentido a ~⅓ (hasta ~1/20 lejos del umbral), pero el filtro **agrega ~4 cm de retraso al frenar** (dos muestras a 5 Hz de por sí ya son 0,1 m a 0,5 m/s). Con una pared a 0,5 m/s la distancia mínima fue 5,5 cm (sin filtro 9,2 cm); a 0,15–0,3 m/s, 10–13 cm. Los bumpers siguen siendo la última barrera; conviene no pasar de ~0,3 m/s en el patio. No es un resultado con el robot real.
+
+Pruebas sin ROS: `PYTHONPATH=. python3 test/test_sonar_filter.py` y `test/test_gate_ramp.py` (histéresis, rampa, "nunca amplifica ni invierte" y lecturas ruidosas simuladas con y sin filtro); escenarios [15]–[17] de `tools/node_scenarios.py`.
+En el robot: `ros2 topic echo /sonar/center --field range` frente a `/sonar_filtered/center --field range` con algo cerca: el filtrado debe verse más estable.
 
 ## Plan de pruebas (robot levantado primero, cuchillas sin conectar)
 
