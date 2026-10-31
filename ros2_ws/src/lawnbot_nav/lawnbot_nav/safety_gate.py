@@ -14,7 +14,7 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
-from lawnbot_nav.safety_logic import (SafetyParams, SafetyState,
+from lawnbot_nav.safety_logic import (SafetyParams, SafetyState, SonarLimiter,
                                       apply_safety, ignored_sonars, merge_alerts,
                                       parse_alert_in)
 
@@ -41,6 +41,8 @@ class SafetyGate(Node):
         self.declare_parameter('max_angular', 1.5)
         self.declare_parameter('sonar_slow_distance', 0.30)
         self.declare_parameter('sonar_stop_distance', 0.15)
+        self.declare_parameter('sonar_stop_hysteresis', 0.05)
+        self.declare_parameter('sonar_release_accel', 0.5)
         for s in SONARS:
             self.declare_parameter(f'sonar_{s}_enabled', True)
             self.declare_parameter(f'sonar_{s}_topic', '')           # vacio = <sonar_topic_prefix>/<s>
@@ -61,7 +63,10 @@ class SafetyGate(Node):
             sonar_slow_distance=gp('sonar_slow_distance').value,
             sonar_stop_distance=gp('sonar_stop_distance').value,
             max_linear=gp('max_linear').value,
-            max_angular=gp('max_angular').value)
+            max_angular=gp('max_angular').value,
+            sonar_stop_hysteresis=gp('sonar_stop_hysteresis').value,
+            sonar_release_accel=gp('sonar_release_accel').value)
+        self.limiter = SonarLimiter()
         for s in SONARS:
             slow = gp(f'sonar_{s}_slow_distance').value
             stop = gp(f'sonar_{s}_stop_distance').value
@@ -189,7 +194,7 @@ class SafetyGate(Node):
             v_cmd, w_cmd = self.v_in, self.w_in
 
         state = self.build_state(now)
-        v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params)
+        v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params, limiter=self.limiter, now=now)
         external = {src: (alert, now - t) for src, (alert, t) in self.external_alerts.items()}
         alert = merge_alerts(local_alert, external, self.alert_ttl)
 

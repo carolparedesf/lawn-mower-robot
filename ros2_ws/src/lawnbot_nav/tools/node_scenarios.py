@@ -672,7 +672,9 @@ def run_gate_perimeter():
     st['front'] = True
     check(run(1.0) == 0.0, '   y el bumper frontal tambien')
     st['front'] = False
-    check(run(1.0) == 0.2, '   sin esos, el avance pasa entero (nunca se amplifica: 0,2 -> 0,2)')
+    run(0.3)
+    check(0.0 < g.pubs['cmd_vel'].last.linear.x < 0.2, '   al soltar el bumper el avance vuelve con rampa (no de golpe)')
+    check(run(2.0) == 0.2, '   y sin esos, el avance pasa entero (nunca se amplifica: 0,2 -> 0,2)')
     check(max(m.linear.x for m in g.pubs['cmd_vel'].sent) <= 0.2 + 1e-12, '   ninguna orden supera la pedida')
     check(run(1.0, publish=('center',)) == 0.2, '   los laterales sin datos no bloquean mientras se ignoran')
     check(run(1.5, publish=('left', 'right')) == 0.0, '   pero el central sin datos si bloquea (falla segura)')
@@ -1651,6 +1653,44 @@ def run_sonar_prefix():
     check(launch.count('sonar_prefix, use_sim_time') == 5 and "executable='sonar_filter'" in launch, '   y el prefijo llega a los cinco consumidores')
 
 
+def run_gate_hysteresis():
+    print('\n[17] safety_gate: histeresis del bloqueo (0,15 -> 0,20) y rampa de subida, como nodo')
+    import yaml
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'safety_gate.yaml')))['safety_gate']['ros__parameters']
+    check(cfg['sonar_stop_hysteresis'] == 0.05 and cfg['sonar_release_accel'] > 0, 'safety_gate.yaml: histeresis 0,05 m y rampa configuradas')
+    g = make(SafetyGate, **cfg)
+    tick = g.timer(0.05)
+    state = {'center': 1.5}
+
+    def run(seconds, center=None):
+        if center is not None:
+            state['center'] = center
+        for _ in range(int(round(seconds / 0.05))):
+            R.advance(0.05)
+            for s_ in ('left', 'right'):
+                g.subs[f'sonar/{s_}'](R.Range(1.5))
+            g.subs['sonar/center'](R.Range(state['center']))
+            for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+                g.subs[b_](R.Bool(False))
+            g.subs['cmd_vel_mux'](_twist(0.3, 0.0))
+            tick()
+        return g.pubs['cmd_vel'].last.linear.x, g.alert
+
+    check(run(1.0)[0] == 0.3, 'camino libre: pasa entero')
+    check(run(0.3, 0.14) == (0.0, 'obstacle_stop'), 'a 0,14 m: bloqueo total')
+    for d in (0.16, 0.19):
+        check(run(0.5, d) == (0.0, 'obstacle_stop'), f'a {d} m (dentro de la banda 0,15-0,20): sigue bloqueado')
+    v, alert = run(0.1, 0.22)
+    check(alert != 'obstacle_stop', 'a 0,22 m (> 0,20): sale del bloqueo')
+    check(0.0 <= v < 0.3 * (0.22 - 0.15) / 0.15 + 1e-9, '   con la rampa: la velocidad parte de abajo')
+    v1 = run(0.0 + 0.05, 1.5)[0]
+    v2 = run(0.5)[0]
+    check(v1 < v2 <= 0.3, 'al despejarse, la velocidad sube de a poco (rampa), no de golpe')
+    check(run(2.0)[0] == 0.3, '   y termina en la orden pedida, sin superarla')
+    check(run(0.1, 0.10)[0] == 0.0, 'al volver a acercarse baja de inmediato')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1744,4 +1784,5 @@ if __name__ == '__main__':
     run_vision()
     run_sonar_filter()
     run_sonar_prefix()
+    run_gate_hysteresis()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

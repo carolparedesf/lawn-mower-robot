@@ -9,8 +9,9 @@ distancia, asi que el robot tiembla. Este filtro, por sonar:
   - rechaza saltos de mas de `max_jump` respecto de la mediana, salvo que dos lecturas seguidas coincidan en el
     nuevo nivel (un obstaculo real que aparece de golpe se acepta a la segunda lectura);
   - publica la mediana de las ultimas `window` (5) lecturas validas. Para no frenar tarde ante un obstaculo
-    real, si las dos lecturas mas recientes estan por debajo de la mediana (acercamiento sostenido) se publica la
-    mayor de las dos: un pico aislado hacia abajo no pasa, una aproximacion real tiene una sola lectura de retraso.
+    real, si las dos lecturas mas recientes estan por debajo de la mediana en mas de `approach_margin` (acercamiento
+    sostenido, no ruido) se publica la mayor de las dos: un pico aislado hacia abajo no pasa, y una aproximacion real
+    solo tiene una lectura de retraso.
 """
 import math
 from collections import deque
@@ -26,6 +27,7 @@ class SonarFilterParams:
     max_range_tolerance: float = 0.02
     max_range_run: int = 3           # lecturas de max_range seguidas para creerle
     min_range: float = 0.02          # m: menos que esto no es una medicion creible
+    approach_margin: float = 0.03    # m: las dos ultimas lecturas deben estar al menos esto bajo la mediana para adelantarla
 
 
 def median(values) -> float:
@@ -61,7 +63,7 @@ class SonarFilter:
         med = median(self.hist)
         if len(self.hist) >= 3:
             a, b = self.hist[-1], self.hist[-2]
-            if a < med and b < med:
+            if a < med - self.p.approach_margin and b < med - self.p.approach_margin:
                 return max(a, b)
         return med
 

@@ -8,5 +8,6 @@ sonar_filter:
     max_range_tolerance: 0.02
     max_range_run: 3             # lecturas seguidas de max_range para publicar max_range
     min_range: 0.02              # m
+    approach_margin: 0.03        # m: dos lecturas seguidas mas de esto bajo la mediana (acercamiento sostenido) la adelantan
     input_prefix: sonar
     output_prefix: sonar_filtered
