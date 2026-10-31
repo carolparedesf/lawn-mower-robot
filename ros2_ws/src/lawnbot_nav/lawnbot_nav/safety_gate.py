@@ -35,6 +35,7 @@ class SafetyGate(Node):
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)
         self.declare_parameter('sensor_timeout', 1.0)
+        self.declare_parameter('sonar_topic_prefix', 'sonar')   # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         self.declare_parameter('alert_ttl', 3.0)
         self.declare_parameter('max_linear', 0.5)
         self.declare_parameter('max_angular', 1.5)
@@ -42,7 +43,7 @@ class SafetyGate(Node):
         self.declare_parameter('sonar_stop_distance', 0.15)
         for s in SONARS:
             self.declare_parameter(f'sonar_{s}_enabled', True)
-            self.declare_parameter(f'sonar_{s}_topic', f'sonar/{s}')
+            self.declare_parameter(f'sonar_{s}_topic', '')           # vacio = <sonar_topic_prefix>/<s>
             # Umbrales propios de cada sonar; negativo = usar los globales
             self.declare_parameter(f'sonar_{s}_slow_distance', -1.0)
             self.declare_parameter(f'sonar_{s}_stop_distance', -1.0)
@@ -92,8 +93,9 @@ class SafetyGate(Node):
 
         for s in SONARS:
             if self.sonar_enabled[s]:
+                topic = gp(f'sonar_{s}_topic').value or f'{gp("sonar_topic_prefix").value}/{s}'
                 self.create_subscription(
-                    Range, gp(f'sonar_{s}_topic').value,
+                    Range, topic,
                     lambda msg, s=s: self.on_sonar(s, msg), qos_profile_sensor_data)
         for topic in self.front_topics + self.back_topics + self.monitor_topics:
             self.create_subscription(

@@ -33,9 +33,12 @@ safety_gate:
     # vigente (mode_timeout) se vuelven a considerar todos.
     ignore_side_sonars_in_perimeter: true
     mode_timeout: 3.0
-    sonar_left_topic: sonar/left
-    sonar_center_topic: sonar/center
-    sonar_right_topic: sonar/right
+    # Topic de cada sonar. Vacio = <sonar_topic_prefix>/<left|center|right>. nav.launch.py pone el prefijo en
+    # sonar_filtered (use_sonar_filter:=true, por defecto) o sonar (sin filtro)
+    sonar_topic_prefix: sonar
+    sonar_left_topic: ''
+    sonar_center_topic: ''
+    sonar_right_topic: ''
 
     # Bumpers frontales: prohiben avance (retroceso y giro permitidos)
     bumper_front_topics: [bumper/B1_front_left, bumper/B2_front_right]
