@@ -1581,6 +1581,49 @@ def run_vision():
     check(t.pubs['vision/grass_present'].last.data is False, '   y publica grass_present=false')
 
 
+def run_sonar_filter():
+    print('\n[15] sonar_filter: sonar/* -> sonar_filtered/* (mediana, saltos, max_range) conservando header y stamp')
+    import yaml
+    from lawnbot_nav.sonar_filter import SonarFilterNode
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'sonar_filter.yaml')))['sonar_filter']['ros__parameters']
+    n = make(SonarFilterNode, **cfg)
+    check(all(f'sonar_filtered/{s_}' in n.pubs for s_ in ('left', 'center', 'right')), 'publica sonar_filtered/left|center|right')
+    check(all(f'sonar/{s_}' in n.subs for s_ in ('left', 'center', 'right')), 'suscribe sonar/left|center|right')
+
+    def send(name, value, nanosec=5):
+        msg = R.Range(value)
+        msg.header.stamp = R.Msg(sec=100, nanosec=nanosec)
+        msg.header.frame_id = f'Sonar{name}_Link'
+        msg.min_range, msg.max_range, msg.field_of_view = 0.02, 1.5, 0.26
+        n.subs[f'sonar/{name}'](msg)
+        return msg
+
+    pub = n.pubs['sonar_filtered/center']
+    for i in range(6):
+        send('center', 0.8, nanosec=i)
+    check(abs(pub.last.range - 0.8) < 1e-9, 'lecturas constantes pasan iguales')
+    last = send('center', 0.8, nanosec=77)
+    check(pub.last.header.stamp.nanosec == 77 and pub.last.header.frame_id == 'Sonarcenter_Link',
+          'conserva el header y el stamp de la ultima lectura')
+    check(pub.last.min_range == 0.02 and pub.last.max_range == 1.5 and pub.last.field_of_view == 0.26, '   y los demas campos del Range')
+    n_before = len(pub.sent)
+    send('center', 1.3, nanosec=88)
+    check(abs(pub.last.range - 0.8) < 1e-9 and pub.last.header.stamp.nanosec == 88, 'un pico de 1,3 m no pasa: sigue 0,8 m (con el stamp nuevo)')
+    send('center', float('nan'))
+    send('center', 0.0)
+    check(len(pub.sent) == n_before + 1, 'lecturas invalidas (NaN, 0) no se publican')
+    for v in (1.5, 0.8, 1.5, 0.8):
+        send('center', v)
+    check(all(abs(m.range - 0.8) < 1e-9 for m in pub.sent[-4:]), 'max_range intercalado no se mezcla con las validas')
+    for _ in range(3):
+        send('center', 1.5)
+    check(pub.last.range == 1.5, 'tres max_range seguidos: recien ahi publica max_range')
+    left = n.pubs['sonar_filtered/left']
+    send('left', 0.5)
+    send('left', 0.5)
+    check(abs(left.last.range - 0.5) < 1e-9 and len(n.pubs['sonar_filtered/right'].sent) == 0, 'cada sonar tiene su propio filtro')
+
+
 def run_events():
     print('\n[10] robot_events: eventos por flanco hacia /robot/events (sin tocar el firmware)')
     import yaml
@@ -1672,4 +1715,5 @@ if __name__ == '__main__':
     run_pf_gating()
     run_map_origin()
     run_vision()
+    run_sonar_filter()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

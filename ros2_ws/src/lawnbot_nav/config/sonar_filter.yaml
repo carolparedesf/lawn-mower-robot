@@ -1,0 +1,12 @@
+# Filtro de sonares: sonar/* -> sonar_filtered/*. Los consumidores (safety_gate, random_walk, perimeter,
+# coverage_map, potential_field) leen sonar_filtered/* cuando nav.launch.py se lanza con use_sonar_filter:=true (por defecto).
+sonar_filter:
+  ros__parameters:
+    window: 5                    # lecturas validas para la mediana
+    max_jump: 0.5                # m: un salto mayor respecto de la mediana se rechaza hasta que otra lectura lo confirme
+    max_range: 1.5               # m: valor que reporta el sonar sin eco
+    max_range_tolerance: 0.02
+    max_range_run: 3             # lecturas seguidas de max_range para publicar max_range
+    min_range: 0.02              # m
+    input_prefix: sonar
+    output_prefix: sonar_filtered
