@@ -1654,11 +1654,12 @@ def run_sonar_prefix():
 
 
 def run_gate_hysteresis():
-    print('\n[17] safety_gate: histeresis del bloqueo (0,15 -> 0,20) y rampa de subida, como nodo')
+    print('\n[17] safety_gate: histeresis del bloqueo (parada 0,10 -> libera 0,15) y rampa de subida, como nodo')
     import yaml
     from lawnbot_nav.safety_gate import SafetyGate
     cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'safety_gate.yaml')))['safety_gate']['ros__parameters']
-    check(cfg['sonar_stop_hysteresis'] == 0.05 and cfg['sonar_release_accel'] > 0, 'safety_gate.yaml: histeresis 0,05 m y rampa configuradas')
+    stop, hyst = cfg['sonar_stop_distance'], cfg['sonar_stop_hysteresis']
+    check(stop == 0.10 and hyst == 0.05 and cfg['sonar_release_accel'] > 0, 'safety_gate.yaml: parada a 0,10 m, histeresis 0,05 m y rampa configuradas')
     g = make(SafetyGate, **cfg)
     tick = g.timer(0.05)
     state = {'center': 1.5}
@@ -1678,17 +1679,18 @@ def run_gate_hysteresis():
         return g.pubs['cmd_vel'].last.linear.x, g.alert
 
     check(run(1.0)[0] == 0.3, 'camino libre: pasa entero')
-    check(run(0.3, 0.14) == (0.0, 'obstacle_stop'), 'a 0,14 m: bloqueo total')
-    for d in (0.16, 0.19):
-        check(run(0.5, d) == (0.0, 'obstacle_stop'), f'a {d} m (dentro de la banda 0,15-0,20): sigue bloqueado')
-    v, alert = run(0.1, 0.22)
-    check(alert != 'obstacle_stop', 'a 0,22 m (> 0,20): sale del bloqueo')
-    check(0.0 <= v < 0.3 * (0.22 - 0.15) / 0.15 + 1e-9, '   con la rampa: la velocidad parte de abajo')
+    check(run(0.3, stop - 0.01) == (0.0, 'obstacle_stop'), 'a 0,09 m: bloqueo total')
+    for d in (stop + 0.01, stop + hyst - 0.01):
+        check(run(0.5, d) == (0.0, 'obstacle_stop'), f'a {d:.2f} m (dentro de la banda 0,10-0,15): sigue bloqueado')
+    d_out = stop + hyst + 0.02
+    v, alert = run(0.1, d_out)
+    check(alert != 'obstacle_stop', f'a {d_out:.2f} m (> 0,15): sale del bloqueo')
+    check(0.0 <= v < 0.3 * (d_out - stop) / (cfg['sonar_slow_distance'] - stop) + 1e-9, '   con la rampa: la velocidad parte de abajo')
     v1 = run(0.0 + 0.05, 1.5)[0]
     v2 = run(0.5)[0]
     check(v1 < v2 <= 0.3, 'al despejarse, la velocidad sube de a poco (rampa), no de golpe')
     check(run(2.0)[0] == 0.3, '   y termina en la orden pedida, sin superarla')
-    check(run(0.1, 0.10)[0] == 0.0, 'al volver a acercarse baja de inmediato')
+    check(run(0.1, stop)[0] == 0.0, 'al volver a acercarse baja de inmediato')
 
 
 def run_events():

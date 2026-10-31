@@ -32,15 +32,16 @@ Parámetros: `ros2_ws/src/lawnbot_nav/config/*.yaml` (umbrales, timeouts, sonare
 | Bumper frontal (B1 o B2) | prohíbe avance; retroceso y giro pasan |
 | Bumper trasero (B5) | prohíbe retroceso |
 | Sonar: mínimo de los habilitados < 0,30 m | avance proporcional |
-| Sonar: mínimo ≤ 0,15 m | avance prohibido; **se libera recién por encima de 0,20 m** (histéresis `sonar_stop_hysteresis`) |
+| Sonar: mínimo ≤ 0,10 m (`sonar_stop_distance`) | avance prohibido; **se libera recién por encima de 0,15 m** (histéresis `sonar_stop_hysteresis`, 0,05) |
 | Sonar: el obstáculo se aleja | la velocidad permitida **sube con rampa** (`sonar_release_accel`, 0,5 m/s²) y **baja de inmediato** |
 | Sonar habilitado o bumper frontal sin datos > 1,0 s | avance prohibido (retroceso y giro permitidos) |
 | B3 / B4 | sin efecto (solo se registran en el log) |
 
 **Rampa e histéresis (contra el temblor):** los sonares saltan y la velocidad dependía de la distancia al instante, así que cerca de un umbral el robot "temblaba".
-- **Histéresis del bloqueo total:** entra a `≤ sonar_stop_distance` (0,15 m) y sale a `> stop + sonar_stop_hysteresis` (0,05 → 0,20 m). Cada sonar con su umbral propio tiene su propia banda; un sonar ignorado (laterales en `auto_perimeter`) olvida su bloqueo; una lectura NaN lo conserva.
+- **Histéresis del bloqueo total:** entra a `≤ sonar_stop_distance` (0,10 m en el YAML) y sale a `> stop + sonar_stop_hysteresis` (0,05 → 0,15 m). Cada sonar con su umbral propio tiene su propia banda; un sonar ignorado (laterales en `auto_perimeter`) olvida su bloqueo; una lectura NaN lo conserva.
 - **Rampa de subida:** el factor de avance (0–1) multiplica la orden, así que equivale a una velocidad permitida de `factor × max_linear`. Esa velocidad crece como máximo `sonar_release_accel` (0,5 m/s², `0` = sin rampa) y baja de inmediato. Un bumper o un dato viejo también la ponen en 0, y al liberarse vuelve con rampa.
 - Sigue valiendo: nunca amplifica ni invierte una velocidad, y el retroceso y el giro no dependen de los sonares.
+- **Parada a 0,10 m** (`sonar_stop_distance: 0.10`, `sonar_slow_distance: 0.30`): entre 0,30 y 0,10 m el avance baja de forma proporcional. En simulación con ruido y el filtro, el robot queda a ~9–10 cm de la pared a 0,15 m/s, ~7–8,5 cm a 0,3 m/s y **solo 2–4 cm a 0,5 m/s** (el retraso del sonar y del filtro). Si quieres que nunca pase de ~8 cm, limita `max_linear` a 0,3 en el mismo YAML. El bumper sigue siendo la última barrera.
 
 **Umbrales por sonar e ignorar los laterales en `auto_perimeter`** (`config/safety_gate.yaml`):
 - `sonar_<left|center|right>_slow_distance` / `_stop_distance`: umbral propio de cada sonar (`-1` = usar los globales 0,30 / 0,15 m). Gana el sonar más restrictivo.
