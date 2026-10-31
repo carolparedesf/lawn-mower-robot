@@ -4,7 +4,7 @@ Solo se limita o anula: ningun factor supera 1 ni invierte el signo de la orden.
 """
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Union
+from typing import Optional, Dict, List, Tuple, Union
 
 ALERT_NONE = 'none'
 ALERT_SENSOR_TIMEOUT = 'sensor_timeout'
@@ -35,6 +35,10 @@ class SafetyParams:
     max_angular: float = 1.5
     # Umbrales propios por sonar: nombre -> (slow, stop). Los que falten usan los globales.
     sonar_thresholds: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    # Solo con SonarLimiter (estado): el bloqueo total entra a <= stop y sale a > stop + sonar_stop_hysteresis; y la
+    # reduccion de velocidad por sonar se relaja como maximo a sonar_release_accel [m/s^2] (baja de inmediato).
+    sonar_stop_hysteresis: float = 0.05        # m (0 = sin histeresis)
+    sonar_release_accel: float = 0.5           # m/s^2 (0 = sin rampa)
 
     def thresholds(self, name) -> Tuple[float, float]:
         slow, stop = self.sonar_thresholds.get(name, (self.sonar_slow_distance, self.sonar_stop_distance))
@@ -69,25 +73,85 @@ def sonar_scale(distance: float, slow: float, stop: float) -> float:
     return (distance - stop) / (slow - stop)
 
 
-def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams):
-    """Devuelve (v, w, alerta). |v_out| <= |v_in| y |w_out| <= |w_in| siempre."""
+class SonarLimiter:
+    """Estado del limitador por sonar: histeresis del bloqueo total y rampa de subida del factor de avance.
+
+    El factor (0..1) multiplica el avance pedido, asi que nunca lo amplifica ni lo invierte. Baja de inmediato; sube
+    como maximo `sonar_release_accel / max_linear` por segundo (el factor equivale a una velocidad permitida de
+    factor * max_linear [m/s], que crece como mucho sonar_release_accel m/s^2). Arranca en 1.0 (sin limite).
+    """
+
+    def __init__(self):
+        self.blocked: Dict[object, bool] = {}
+        self.factor = 1.0
+        self.last_time = None
+
+    def update(self, now: float, readings, params: SafetyParams, force_zero: bool = False):
+        """readings: lista de (nombre o None, distancia). Devuelve (factor, stop_hit, near_hit)."""
+        raw = 1.0
+        stop_hit = near_hit = False
+        blocked: Dict[object, bool] = {}
+        for i, (name, distance) in enumerate(readings):
+            key = name if name is not None else i
+            if math.isnan(distance):
+                if key in self.blocked:
+                    blocked[key] = self.blocked[key]          # sin dato valido: conserva el estado
+                    if blocked[key]:
+                        raw, stop_hit, near_hit = 0.0, True, True
+                continue
+            slow, stop = params.thresholds(name)
+            limit = stop + (params.sonar_stop_hysteresis if self.blocked.get(key, False) else 0.0)
+            is_blocked = distance <= limit
+            blocked[key] = is_blocked
+            if is_blocked:
+                raw, stop_hit = 0.0, True
+            else:
+                raw = min(raw, sonar_scale(distance, slow, stop))
+            near_hit = near_hit or is_blocked or distance < slow
+        self.blocked = blocked                                 # los sonares que ya no cuentan se olvidan
+
+        dt = 0.0 if self.last_time is None else max(0.0, min(now - self.last_time, 0.5))
+        self.last_time = now
+        if force_zero:
+            self.factor = 0.0
+        elif raw <= self.factor:
+            self.factor = raw                                  # baja de inmediato
+        elif params.sonar_release_accel > 0.0 and params.max_linear > 0.0:
+            rate = params.sonar_release_accel / params.max_linear
+            self.factor = min(raw, self.factor + rate * dt)
+        else:
+            self.factor = raw
+        return self.factor, stop_hit, near_hit
+
+
+def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams,
+                 limiter: Optional[SonarLimiter] = None, now: float = 0.0):
+    """Devuelve (v, w, alerta). |v_out| <= |v_in| y |w_out| <= |w_in| siempre.
+
+    Sin `limiter` las reglas de sonar son instantaneas y sin estado; con un SonarLimiter (el safety_gate lo usa)
+    se agregan la histeresis del bloqueo y la rampa de subida."""
     v_in, w_in = v, w
     v = clamp_magnitude(v, params.max_linear)
     w = clamp_magnitude(w, params.max_angular)
 
     readings = (list(state.sonar_ranges.items()) if isinstance(state.sonar_ranges, dict)
                 else [(None, d) for d in state.sonar_ranges])
-    forward_factor = 1.0
-    stop_hit = near_hit = False
-    for name, distance in readings:
-        if math.isnan(distance):
-            continue
-        slow, stop = params.thresholds(name)
-        forward_factor = min(forward_factor, sonar_scale(distance, slow, stop))
-        stop_hit = stop_hit or distance <= stop
-        near_hit = near_hit or distance < slow
-    if state.front_pressed or state.stale:
+    forced = state.front_pressed or state.stale
+    if limiter is not None:
+        forward_factor, stop_hit, near_hit = limiter.update(now, readings, params, force_zero=forced)
+    else:
+        forward_factor = 1.0
+        stop_hit = near_hit = False
+        for name, distance in readings:
+            if math.isnan(distance):
+                continue
+            slow, stop = params.thresholds(name)
+            forward_factor = min(forward_factor, sonar_scale(distance, slow, stop))
+            stop_hit = stop_hit or distance <= stop
+            near_hit = near_hit or distance < slow
+    if forced:
         forward_factor = 0.0
+    forward_factor = max(0.0, min(1.0, forward_factor))
 
     if v > 0.0:
         v *= forward_factor
