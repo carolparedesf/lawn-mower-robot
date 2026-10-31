@@ -17,8 +17,8 @@ safety_gate:
 
     # Reglas de distancia sobre el MINIMO de los sonares habilitados [m]
     sonar_slow_distance: 0.30   # por debajo: avance proporcional
-    sonar_stop_distance: 0.15   # por debajo: avance prohibido
-    # Histeresis del bloqueo total: entra a <= sonar_stop_distance y sale recien a > stop + esto [m] (0.15 -> 0.20)
+    sonar_stop_distance: 0.10   # a esta distancia o menos: avance prohibido (se libera por encima de stop + histeresis = 0.15)
+    # Histeresis del bloqueo total: entra a <= sonar_stop_distance y sale recien a > stop + esto [m] (0.10 -> 0.15)
     sonar_stop_hysteresis: 0.05
     # Rampa de subida: la velocidad que dejan pasar los sonares crece como maximo a esta aceleracion [m/s^2] cuando el
     # obstaculo se aleja; baja de inmediato. 0 = sin rampa. Evita el temblor cuando la distancia salta cerca de un umbral
