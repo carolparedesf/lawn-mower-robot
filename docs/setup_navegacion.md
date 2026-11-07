@@ -433,6 +433,26 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    y split 45° solo el lateral; si el split es 80° se presiona además B2 o B5. `perimeter` da la vuelta completa de `sim_room` con radio 0,05 y 0,10 m y zona muerta de 0° y 20°
    (`test_perimeter.py`, con la pose real para el avance entre contactos).
 
+   **Mundos simulados** (`sim_world.launch.py world:=room|field`, por defecto `room`):
+   | `world` | Archivo | Qué es | Arranque |
+   |---|---|---|---|
+   | `room` | `config/sim_room.yaml` | cuarto de 10 × 8 m con un bloque y un obstáculo circular | (2, 1) |
+   | `field` | `config/sim_field.yaml` | campo abierto de 30 × 30 m, sin paredes interiores, con 3 obstáculos chicos (radios 0,25–0,4 m) y un borde exterior lejano a 5 m (de −5 a 35 en x e y) para que el robot no se escape | (15, 15), el centro |
+
+   Un `world` desconocido hace fallar el launch con un mensaje claro. Los dos usan las mismas esquinas redondeadas de arriba.
+
+   **Probar la app con un cerco dibujado a escala real.** Dibujá el cerco en la app (queda en `~/.ros/lawnbot_geofence.json`, en lat/lon) y alinealo con el mundo con
+   `tools/datum_from_fence.py`, que calcula `datum_lat`/`datum_lng` para que el centro del cerco (el centroide del polígono) caiga en el centro del mundo (centro de la caja de las paredes):
+   ```bash
+   python3 ros2_ws/src/lawnbot_nav/tools/datum_from_fence.py --world field        # --fence RUTA.json, --margin 0.4
+   # imprime, por ejemplo:
+   ros2 launch lawnbot_nav sim_world.launch.py world:=field
+   ros2 launch lawnbot_nav nav.launch.py geofence_conversion_mode:=datum datum_lat:=-25.300010407 datum_lng:=-57.599998952
+   ```
+   Antes de imprimir los comandos comprueba que el cerco sea válido (mismas reglas que `geofence_node`), que **entre en el mundo** (ningún vértice sobre o fuera de las paredes) y que el arranque del
+   robot quede dentro del cerco con al menos `--margin` (0,4 m) hasta el borde. Si algo falla imprime el motivo, **no** imprime comandos y sale con código 2 (1 si no puede leer el cerco).
+   Con `room` el cerco tiene que caber en 10 × 8 m y contener el arranque (2, 1) con margen. No hace falta ROS. Si `nav.launch.py` ya estaba corriendo con otro datum, reiniciarlo: `geofence_node` no aplica el datum en caliente.
+
    **Ver la simulación en RViz** (solo simulación: lo publica `fake_robot`, nada del robot real; en `sim_room.yaml` va `publish_markers: true` y por defecto está apagado):
    ```bash
    ros2 launch lawnbot_nav sim_world.launch.py        # fake_robot (y, aparte, nav.launch.py)

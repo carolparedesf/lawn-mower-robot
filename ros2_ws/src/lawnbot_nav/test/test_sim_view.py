@@ -97,9 +97,11 @@ class SimRoomRvizTests(unittest.TestCase):
         import yaml
         room = yaml.safe_load(open(os.path.join(self.CFG, 'sim_room.yaml')))['fake_robot']['ros__parameters']
         self.assertTrue(room['publish_markers'])
+        field = yaml.safe_load(open(os.path.join(self.CFG, 'sim_field.yaml')))['fake_robot']['ros__parameters']
+        self.assertTrue(field['publish_markers'])
         # nada del robot real (nav.launch.py ni los YAML de los nodos reales) menciona los marcadores de simulacion
         for name in os.listdir(self.CFG):
-            if name.endswith('.yaml') and name != 'sim_room.yaml':
+            if name.endswith('.yaml') and not name.startswith('sim_'):
                 self.assertNotIn('publish_markers', open(os.path.join(self.CFG, name)).read(), name)
         launch = open(os.path.join(self.CFG, '..', 'launch', 'nav.launch.py')).read()
         self.assertNotIn('fake_robot', launch)
