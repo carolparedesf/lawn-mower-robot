@@ -150,6 +150,10 @@ class CommandLineTests(unittest.TestCase):
         r = dff.compute(rect(-25.3, -57.6, 24.0, 20.0), 'field')
         self.assertAlmostEqual(lat, r['datum_lat'], places=8)
         self.assertAlmostEqual(lng, r['datum_lng'], places=8)
+        bridge = next(l for l in out.splitlines() if 'bridge.py' in l)
+        self.assertIn('--sim-position', bridge)
+        self.assertAlmostEqual(float(bridge.split('--datum-lat ')[1].split()[0]), r['datum_lat'], places=8)
+        self.assertAlmostEqual(float(bridge.split('--datum-lng ')[1].split()[0]), r['datum_lng'], places=8)
 
     def test_sin_archivo_de_cerco(self):
         rc, out, err = self.run_main(None, '--world', 'field')

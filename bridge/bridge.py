@@ -11,7 +11,9 @@ ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
                         blade/trimmer/force_cut pedidos, blade_running/trimmer_running reales y blade_status (texto de
                         /blade/status: por que la cuchilla corre o no; se omite si esta viejo)
-  robot/position     <- gpsd (hilo propio, sin cambios)
+  robot/position     <- gpsd (hilo propio, sin cambios). Solo en simulacion, con --sim-position o LAWNBOT_SIM_POSITION=1:
+                        la TF map->base_footprint convertida a lat/lng con el datum del geofence_node (sim_position.py);
+                        con esa opcion no se conecta a gpsd
   robot/status.alert <- tambien /robot/events (lifted, low_battery...) por unos segundos si no hay alerta de seguridad
   robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
 
@@ -35,7 +37,10 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, Float32, String
 import paho.mqtt.client as mqtt
-import gpsd
+try:
+    import gpsd
+except ImportError:                                 # en simulacion (portatil) puede no estar instalado
+    gpsd = None
 
 try:
     from actuator_relay import ActuatorRelay, mode_allows_actuators
@@ -62,8 +67,10 @@ LATCHED = QoSProfile(
 
 
 class RobotBridge(Node):
-    def __init__(self):
+    def __init__(self, sim_position=None):
+        """sim_position: None (robot real, posicion de gpsd) o (datum_lat, datum_lng) para tomarla de la TF de la simulacion."""
         super().__init__('robot_bridge')
+        self.sim_datum = sim_position
 
         # Publishers ROS2
         self.cmd_vel_manual_pub = self.create_publisher(Twist, 'cmd_vel_manual', 10)
@@ -113,15 +120,29 @@ class RobotBridge(Node):
         self.create_timer(ENABLE_PERIOD_S, self.publish_enables)
         self.publish_mode()
 
-        # GPS thread
-        self.gps_thread = threading.Thread(target=self.gps_loop, daemon=True)
-        self.gps_thread.start()
+        if self.sim_datum is None:
+            # GPS thread
+            self.gps_thread = threading.Thread(target=self.gps_loop, daemon=True)
+            self.gps_thread.start()
+        else:
+            # Simulacion: sin gpsd; la pose sale de la TF map -> base_footprint
+            import sim_position
+            from tf2_ros import Buffer, TransformListener
+            from lawnbot_nav.tf_utils import lookup_pose
+            self.sim_position = sim_position
+            self.lookup_pose = lookup_pose
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self.create_timer(sim_position.SIM_PERIOD_S, self.publish_sim_position)
 
         # MQTT loop en hilo separado
         self.mqtt_thread = threading.Thread(target=self.mqtt.loop_forever, daemon=True)
         self.mqtt_thread.start()
 
-        self.get_logger().info("Robot bridge iniciado")
+        if self.sim_datum is None:
+            self.get_logger().info("Robot bridge iniciado")
+        else:
+            self.get_logger().info(f"Robot bridge iniciado (posicion SIMULADA desde la TF, datum {self.sim_datum}; sin gpsd)")
 
     # ── MQTT ─────────────────────────────────────────────────
 
@@ -278,6 +299,14 @@ class RobotBridge(Node):
 
     # ── GPS ───────────────────────────────────────────────────
 
+    def publish_sim_position(self):
+        sp = self.sim_position
+        pose = self.lookup_pose(self, self.tf_buffer, sp.SIM_FRAME, sp.SIM_BASE_FRAME, sp.SIM_POSE_TIMEOUT_S)
+        if pose is None:
+            return
+        position = sp.position_payload(pose.x, pose.y, pose.yaw, *self.sim_datum)
+        self.mqtt.publish("robot/position", json.dumps(position), qos=0)
+
     def gps_loop(self):
         gpsd.connect()
         while True:
@@ -302,9 +331,18 @@ def _raise_interrupt(signum, frame):
 def main():
     # Sin el manejador de senales de rclpy: asi, al recibir SIGTERM (systemd) o Ctrl+C, el contexto sigue valido
     # y se alcanzan a publicar las ordenes de apagado antes de cerrar.
+    sim_position = None
+    if '--sim-position' in sys.argv or os.environ.get('LAWNBOT_SIM_POSITION', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        try:
+            import sim_position as sim
+            sim_position = sim.parse_options(sys.argv, os.environ)
+        except (ImportError, ValueError) as exc:
+            sys.exit(f"bridge.py: {exc}")
+    elif gpsd is None:
+        sys.exit("bridge.py: falta el modulo gpsd (pip install gpsd-py3). Para simulacion sin GPS use --sim-position.")
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     signal.signal(signal.SIGTERM, _raise_interrupt)
-    bridge = RobotBridge()
+    bridge = RobotBridge(sim_position)
     try:
         rclpy.spin(bridge)
     except (KeyboardInterrupt, ExternalShutdownException):

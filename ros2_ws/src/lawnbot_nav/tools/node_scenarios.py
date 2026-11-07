@@ -1847,6 +1847,88 @@ def run_geofence_restore_equals_topic():
     check(gb.stale is False and gb.poly is not None, '   el restaurado queda convertido y vigente, igual que el otro')
 
 
+def run_bridge_sim_position():
+    print('\n[22] bridge: robot/position desde la TF map->base_footprint (solo simulacion, apagado por defecto)')
+    import importlib.util
+    import threading
+    import types as _types
+    repo = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..'))
+    sys.path.insert(0, os.path.join(repo, 'bridge'))
+
+    class Client:
+        def __init__(self, *a, **k):
+            self.published = []
+            self.on_connect = self.on_message = None
+
+        def connect(self, *a, **k):
+            pass
+
+        def loop_forever(self):
+            pass
+
+        def subscribe(self, topic, qos=0):
+            pass
+
+        def publish(self, topic, payload, qos=0, retain=False):
+            self.published.append((topic, payload, qos, retain))
+
+    paho_client = _types.ModuleType('paho.mqtt.client')
+    paho_client.Client, paho_client.CallbackAPIVersion = Client, _types.SimpleNamespace(VERSION2=2)
+    paho_mqtt = _types.ModuleType('paho.mqtt')
+    paho_mqtt.client = paho_client
+    gpsd_calls = []
+    gpsd = _types.ModuleType('gpsd')
+    gpsd.connect = lambda *a, **k: gpsd_calls.append('connect')
+    sys.modules.update({'paho': _types.ModuleType('paho'), 'paho.mqtt': paho_mqtt, 'paho.mqtt.client': paho_client, 'gpsd': gpsd})
+
+    started = []
+    real_thread = threading.Thread
+
+    class RecordingThread:
+        def __init__(self, target=None, **k):
+            self.target = target
+
+        def start(self):
+            started.append(getattr(self.target, '__name__', ''))
+    threading.Thread = RecordingThread
+    try:
+        spec = importlib.util.spec_from_file_location('bridge_sim_position', os.path.join(repo, 'bridge', 'bridge.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        real = make(mod.RobotBridge)
+        n_real = list(started)
+        del started[:]
+        R.TF['poses'].clear()
+        sim = mod.RobotBridge((LAT0, LNG0))
+    finally:
+        threading.Thread = real_thread
+
+    check('gps_loop' in n_real and not hasattr(real, 'sim_position'), 'sin la opcion: hilo de gpsd y nada de TF (robot real igual que siempre)')
+    check('gps_loop' not in started and gpsd_calls == [], 'con la opcion: no se crea el hilo de gpsd ni se conecta')
+    tick = [cb for _, cb in sim.timers if getattr(cb, '__name__', '') == 'publish_sim_position'][0]
+    check(any(abs(p - 1.0) < 1e-9 and cb is tick for p, cb in sim.timers), '   y publica a 1 Hz')
+    positions = lambda: [m for m in sim.mqtt.published if m[0] == 'robot/position']   # noqa: E731
+
+    tick()
+    check(positions() == [], 'sin TF map->base_footprint: no publica nada')
+    R.set_pose('map', 'base_footprint', 15.0, 15.0, math.pi / 2)
+    tick()
+    topic, payload, qos, retain = positions()[-1]
+    msg = json.loads(payload)
+    check(set(msg) == {'lat', 'lng', 'hdg'} and qos == 0 and retain is False, 'publica robot/position con el JSON de siempre {lat, lng, hdg}, QoS 0')
+    gx, gy = lat_lon_to_local_xy(msg['lat'], msg['lng'], LAT0, LNG0)
+    check(abs(gx - 15.0) < 1e-6 and abs(gy - 15.0) < 1e-6, '   lat/lng vuelven a (15, 15) con la conversion de geofence_node (mismo datum)')
+    check(abs(msg['hdg']) < 1e-6, '   rumbo 0 (norte) para yaw = +90 grados')
+    R.set_pose('map', 'base_footprint', 12.0, 20.0, 0.0)
+    tick()
+    m2 = json.loads(positions()[-1][1])
+    check(abs(m2['hdg'] - 90.0) < 1e-6, '   rumbo 90 (este) para yaw = 0')
+    R.advance(3.0)                                             # la TF queda vieja (> 2 s)
+    n = len(positions())
+    tick()
+    check(len(positions()) == n, 'TF vieja: deja de publicar en vez de repetir la ultima posicion')
+
+
 def run_sonar_prefix():
     print('\n[16] consumidores de sonares: leen sonar_filtered/* con sonar_topic_prefix (y sonar/* por defecto)')
     import yaml
@@ -2000,6 +2082,7 @@ if __name__ == '__main__':
     run_gate_perimeter()
     run_blade()
     run_bridge_actuators()
+    run_bridge_sim_position()
     run_events()
     run_potential_field()
     run_pf_gating()
