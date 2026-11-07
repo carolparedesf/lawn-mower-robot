@@ -1654,6 +1654,60 @@ def run_perimeter_pose():
     R.drop_pose('odom', 'base_footprint')
 
 
+def run_sim_view():
+    print('\n[19] fake_robot: /sim/markers y /sim/path para RViz (solo simulacion)')
+    import yaml
+    from lawnbot_nav.fake_robot import FakeRobot
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    room = yaml.safe_load(open(os.path.join(cfg_dir, 'sim_room.yaml')))['fake_robot']['ros__parameters']
+    check(room['publish_markers'] is True, 'sim_room.yaml enciende publish_markers')
+    off = make(FakeRobot, **dict(room, publish_markers=False))
+    check('sim/markers' not in off.pubs and 'sim/path' not in off.pubs, 'por defecto (publish_markers false) no publica nada de /sim')
+    check(make(FakeRobot, x=1.0).pubs.get('sim/markers') is None, 'sin la opcion (valor por defecto) tampoco')
+
+    n = make(FakeRobot, **dict(room, x=5.0, y=2.0, yaw=0.0, path_max_poses=50))      # libre, lejos de las paredes
+    view, sensors, tick = n.timer(1.0), n.timer(1.0 / room['sensor_rate_hz']), n.timer(n.dt)
+    check('sim/markers' in n.pubs and 'sim/path' in n.pubs, 'publica /sim/markers y /sim/path')
+    markers = lambda: n.pubs['sim/markers'].sent[-1].markers      # noqa: E731
+    view()
+    ms = markers()
+    by_ns = {}
+    for m in ms:
+        by_ns.setdefault(m.ns, []).append(m)
+    check(len(by_ns['walls'][0].points) == 2 * len(n.world.walls) and by_ns['walls'][0].header.frame_id == room['frame_id'],
+          f'paredes: {len(n.world.walls)} segmentos en el frame {room["frame_id"]}')
+    check(len(by_ns['obstacles']) == len(n.world.circles) == 1 and abs(by_ns['obstacles'][0].scale.x - 1.0) < 1e-9,
+          'obstaculo circular (diametro 1,0 m)')
+    fp = by_ns['footprint'][0]
+    check(fp.header.frame_id == 'base_footprint' and len(fp.points) > 4 and fp.points[0].x == fp.points[-1].x,
+          f'huella cerrada con las esquinas redondeadas ({len(fp.points)} puntos, en base_footprint)')
+    check(len(by_ns['bumpers']) == 5 and all(len(m.points) >= 2 for m in by_ns['bumpers']), 'cinco bumpers, cada uno un segmento')
+    red = lambda m: m.color.r > 0.9 and m.color.g < 0.2      # noqa: E731
+    check(not [m for m in markers() if m.ns == 'bumpers' and red(m)], 'libre: ningun bumper en rojo')
+    before = len(n.pubs['sim/markers'].sent)
+    n.robot.x, n.robot.y = 9.78, 4.0                       # frente a ~1 cm de la pared este
+    sensors()
+    check(len(n.pubs['sim/markers'].sent) == before + 1, 'un cambio en los bumpers republica los marcadores sin esperar al timer')
+    names = list(n.world.zones)
+    red_names = {names[m.id] for m in markers() if m.ns == 'bumpers' and red(m)}
+    check({'bumper/B1_front_left', 'bumper/B2_front_right'} <= red_names and 'bumper/B5_back' not in red_names,
+          f'bumpers presionados en rojo ({sorted(red_names)})')
+    sensors()
+    check(len(n.pubs['sim/markers'].sent) == before + 1, 'sin cambios no republica en cada lectura')
+
+    # rastro: se mueve (hacia atras, libre) y queda limitado a path_max_poses
+    n.v_cmd, n.w_cmd, n.last_cmd = -0.4, 0.3, R.MONO['t']
+    for _ in range(400):
+        R.advance(0.02)
+        n.last_cmd = R.MONO['t']
+        tick()
+    view()
+    path = n.pubs['sim/path'].sent[-1]
+    check(0 < len(path.poses) <= 50 and path.header.frame_id == room['frame_id'], f'rastro limitado a path_max_poses: {len(path.poses)} poses')
+    last = path.poses[-1].pose.position
+    check(math.dist((last.x, last.y), (n.robot.x, n.robot.y)) < 0.1, 'la ultima pose del rastro es la actual')
+
+
 def run_sonar_prefix():
     print('\n[16] consumidores de sonares: leen sonar_filtered/* con sonar_topic_prefix (y sonar/* por defecto)')
     import yaml
@@ -1816,4 +1870,5 @@ if __name__ == '__main__':
     run_sonar_prefix()
     run_gate_hysteresis()
     run_perimeter_pose()
+    run_sim_view()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

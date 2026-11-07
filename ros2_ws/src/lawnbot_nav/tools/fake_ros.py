@@ -97,6 +97,7 @@ class Path:
 
 class Marker:
     ADD, DELETEALL, LINE_STRIP, SPHERE_LIST = 0, 3, 4, 7
+    CYLINDER, LINE_LIST = 3, 5
 
     def __init__(self):
         self.header = Header()
