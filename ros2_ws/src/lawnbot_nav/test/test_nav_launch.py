@@ -49,5 +49,34 @@ class GeofenceLaunchArgsTests(unittest.TestCase):
             self.assertIn(key, keys)
 
 
+SIM_LAUNCH = os.path.join(HERE, '..', 'launch', 'sim_world.launch.py')
+
+
+def load_sim():
+    spec = importlib.util.spec_from_file_location('sim_world_launch', SIM_LAUNCH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@unittest.skipUnless(HAVE_LAUNCH, 'requiere ROS 2 (launch, launch_ros)')
+class SimWorldLaunchTests(unittest.TestCase):
+    def test_argumento_world_con_room_por_defecto(self):
+        entities = load_sim().generate_launch_description().entities
+        args = {e.name: ''.join(t.text for t in e.default_value) for e in entities if isinstance(e, DeclareLaunchArgument)}
+        self.assertEqual(args, {'world': 'room'})
+
+    def test_world_elige_el_yaml(self):
+        mod = load_sim()
+        self.assertEqual(mod.world_config('/share', 'room'), '/share/config/sim_room.yaml')
+        self.assertEqual(mod.world_config('/share', 'field'), '/share/config/sim_field.yaml')
+        for world in mod.WORLDS:
+            self.assertTrue(os.path.exists(os.path.join(HERE, '..', 'config', f'sim_{world}.yaml')))
+
+    def test_world_invalido(self):
+        with self.assertRaises(ValueError):
+            load_sim().world_config('/share', 'jardin')
+
+
 if __name__ == '__main__':
     unittest.main()

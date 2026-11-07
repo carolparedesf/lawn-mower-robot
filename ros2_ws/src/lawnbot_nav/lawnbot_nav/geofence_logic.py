@@ -56,12 +56,18 @@ def drop_closing_vertex(points: Sequence[Point], eps: float = 1e-9) -> List[Poin
 
 # ── Conversion de respaldo (plano tangente local, x = este, y = norte) ──
 
-def lat_lon_to_local_xy(lat: float, lng: float, lat0: float, lng0: float) -> Point:
+def meters_per_degree(lat0: float) -> Point:
+    """(metros por grado de longitud, metros por grado de latitud) a la latitud lat0."""
     phi = math.radians(lat0)
     m_per_deg_lat = (111132.92 - 559.82 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi)
                      - 0.0023 * math.cos(6 * phi))
     m_per_deg_lng = (111412.84 * math.cos(phi) - 93.5 * math.cos(3 * phi)
                      + 0.118 * math.cos(5 * phi))
+    return m_per_deg_lng, m_per_deg_lat
+
+
+def lat_lon_to_local_xy(lat: float, lng: float, lat0: float, lng0: float) -> Point:
+    m_per_deg_lng, m_per_deg_lat = meters_per_degree(lat0)
     return ((lng - lng0) * m_per_deg_lng, (lat - lat0) * m_per_deg_lat)
 
 
