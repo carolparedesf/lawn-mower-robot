@@ -1,6 +1,11 @@
 perimeter:
   ros__parameters:
     rate_hz: 20.0
+    # TF con la pose real, para medir el avance entre contactos (esquina por falta de progreso). odom en el robot;
+    # map con fake_robot cuando su frame_id es map (sim_room.yaml). Sin la TF se integra v*dt (y el log avisa una vez).
+    frame_id: odom
+    base_frame: base_footprint
+    pose_timeout: 0.5
     sensor_timeout: 1.0
     side: right                    # lado de la pared: left | right (bumper B3 / B4 de ese lado)
     linear: 0.15                   # m/s

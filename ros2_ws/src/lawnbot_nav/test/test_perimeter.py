@@ -10,7 +10,7 @@ DT = 0.05
 SENSOR_DT = 0.2        # el firmware publica sonares y bumpers a 5 Hz
 
 
-def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None):
+def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use_pose=False):
     """Lazo cerrado con el mundo simulado. Los sonares laterales miran a +-side_sonar_angle_deg."""
     core = PerimeterCore(params)
     robot = SimRobot(*start, tau=tau)
@@ -34,7 +34,8 @@ def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None):
             center_range=ranges['center'],
             side_bumper=bumpers[side_bumper],
             front_bumper=bumpers['bumper/B1_front_left'] or bumpers['bumper/B2_front_right'],
-            back_bumper=bumpers['bumper/B5_back'])
+            back_bumper=bumpers['bumper/B5_back'],
+            pose=(robot.x, robot.y) if use_pose else None)
         v, w = core.update(inp, t)
         log['collisions'] += world.step_robot(robot, v, w, DT)
         log['xy'].append((robot.x, robot.y))
@@ -310,9 +311,9 @@ class SonarRefinementTests(unittest.TestCase):
 class EsquinasTests(unittest.TestCase):
     """Que el perimetral no dependa de que bumpers toque el chasis en la esquina (se prueban las dos formas del sim)."""
 
-    def lap(self, cls, side, start, room=None):
+    def lap(self, cls, side, start, room=None, use_pose=False):
         world = room or cls(walls=SimWorld.room(10.0, 8.0).walls)
-        core, robot, log = simulate(world, PerimeterParams(side=side), start=start, tmax=900.0)
+        core, robot, log = simulate(world, PerimeterParams(side=side), start=start, tmax=900.0, use_pose=use_pose)
         self.assertNotEqual(core.state, FAILED, f'{cls.__name__} {side}: {core.fail_reason} en ({robot.x:.2f}, {robot.y:.2f})')
         self.assertNotIn('perimeter_blocked', log['alerts'])
         return log
@@ -327,9 +328,10 @@ class EsquinasTests(unittest.TestCase):
 
     def test_vuelta_al_cuarto_de_sim_room_con_las_dos_formas_de_bumpers(self):
         for cls in (SimWorld, LegacyBumperWorld):
-            with self.subTest(sim=cls.__name__):
-                log = self.lap(cls, 'right', (2.0, 1.0, 0.0), room=sim_room_world(cls))
-                self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0), 'no dio la vuelta completa')
+            for use_pose in (False, True):                       # respaldo v*dt y pose real
+                with self.subTest(sim=cls.__name__, pose=use_pose):
+                    log = self.lap(cls, 'right', (2.0, 1.0, 0.0), room=sim_room_world(cls), use_pose=use_pose)
+                    self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0), 'no dio la vuelta completa')
 
     # ── lógica pura ──
 
@@ -410,6 +412,56 @@ class EsquinasTests(unittest.TestCase):
             t, kind = self._ciclo(core, t, avance=0.60)
             self.assertEqual(kind, 'side')
             core.state = FOLLOW
+
+    # ── avance medido con la pose real ──
+
+    def _ciclos_con_pose(self, poses, avance=0.30, **kw):
+        """Ciclos de FOLLOW (se ordena `avance` m) y contacto lateral; el robot reporta `poses[i]` en el contacto i.
+        Devuelve (tipos de contacto, nucleo)."""
+        core = PerimeterCore(PerimeterParams(side='right', **kw))
+        core.state = FOLLOW
+        t, kinds = 0.0, []
+        free = PerimeterInputs(sensors_ok=True, center_range=1.5)
+        back_time = core.p.contact_back_distance / core.p.contact_back_speed
+        for pose in poses:
+            end = t + avance / 0.15
+            while t < end:
+                core.update(PerimeterInputs(sensors_ok=True, center_range=1.5, pose=pose), t)
+                t += 0.05
+            core.update(PerimeterInputs(sensors_ok=True, center_range=1.5, side_bumper=True, pose=pose), t)
+            kinds.append(core.contact_kind)
+            t += back_time + 0.05
+            core.update(PerimeterInputs(sensors_ok=True, center_range=1.5, pose=pose), t)
+            core.state = FOLLOW
+        return kinds, core
+
+    def test_robot_trabado_que_recibe_v_positiva_se_detecta_como_falta_de_progreso(self):
+        # Se le ordena avanzar 0.30 m por ciclo (v*dt integrado: neto 0.20, "suficiente") pero la pose no cambia.
+        stuck = [(5.0, 0.3)] * 4
+        kinds, core = self._ciclos_con_pose(stuck)
+        self.assertEqual(kinds, ['side', 'side', 'side', 'front'])    # 1er contacto sin referencia; 2, 3 y 4 sin avance
+        self.assertEqual(core.progress_source, 'pose')
+        self.assertAlmostEqual(core.last_progress, 0.0)
+        # lo mismo sin pose (respaldo): cree que avanzo y NO lo detecta
+        kinds, core = self._ciclos_con_pose([None] * 6)
+        self.assertEqual(kinds, ['side'] * 6)
+        self.assertEqual(core.progress_source, 'integrated')
+
+    def test_la_pose_mide_el_avance_real_entre_contactos(self):
+        moving = [(5.0 + 0.30 * i, 0.3) for i in range(6)]            # 0.30 m reales por ciclo
+        kinds, core = self._ciclos_con_pose(moving)
+        self.assertEqual(kinds, ['side'] * 6)
+        self.assertAlmostEqual(core.last_progress, 0.30)
+        slow = [(5.0 + 0.05 * i, 0.3) for i in range(5)]              # 5 cm por ciclo, aunque se ordenen 0.30 m
+        kinds, _ = self._ciclos_con_pose(slow)
+        self.assertEqual(kinds, ['side', 'side', 'side', 'front', 'side'])
+
+    def test_si_falta_la_pose_en_un_contacto_usa_v_dt_en_ese_ciclo(self):
+        poses = [(5.0, 0.3), None, (5.0, 0.3), (5.0, 0.3), (5.0, 0.3)]
+        kinds, core = self._ciclos_con_pose(poses)
+        # contactos 2 y 3 comparan contra una pose faltante: v*dt (0.20 neto, no cuenta); 4 y 5 con pose: sin avance
+        self.assertEqual(kinds[:3], ['side'] * 3)
+        self.assertEqual(core.progress_source, 'pose')
 
     def test_stalled_contacts_cero_lo_apaga(self):
         core = PerimeterCore(PerimeterParams(side='right', stalled_contacts=0))
