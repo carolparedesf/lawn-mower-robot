@@ -381,6 +381,13 @@ Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumpe
 4. Si al girar el bumper sigue presionado (la cola roza la pared), **avanza** `contact_forward_time_s` en vez de empujar. Si el contacto es continuo
    más de `contact_timeout_s`, intenta liberarse con un retroceso en arco (`unstick_*`, hasta `unstick_attempts` veces) y recién después se declara bloqueado.
 - **Esquina interior:** el sonar central (`obstacle_distance`, 0,45 m; se puede apagar con `use_center_sonar: false`) o un bumper frontal disparan el giro.
+- **Contacto lateral girando en la esquina:** si en `CORNER` se presiona el bumper lateral, retrocede `corner_back_distance` (0,12 m) antes de seguir girando. Si tras ese
+  retroceso sigue tocando (con el rumbo hacia la esquina, retroceder arrastra la cola contra la pared), o si lo que toca es el bumper trasero, **avanza** `contact_forward_time_s`
+  a `contact_forward_speed` y vuelve a `CORNER`. El tiempo total en una esquina sigue acotado por `corner_timeout_s` (8 s) → `UNSTICK` → `perimeter_blocked`.
+- **Esquina por falta de progreso:** `stalled_contacts` (3) contactos laterales seguidos con menos de `stalled_progress_distance` (0,15 m) de **avance neto ordenado** entre uno y otro
+  (lo avanzado menos lo retrocedido, integrando `v·dt`; no usa odometría) se tratan como contacto frontal: retroceso y giro de `front_contact_turn_angle_deg` (45°). Así la esquina se
+  detecta aunque el chasis no presione ningún bumper frontal. `stalled_contacts: 0` lo apaga. Ejemplo típico: en una esquina sin bumper frontal el ciclo toque–retroceso 0,10 m–giro 15°
+  avanzaba ~2–3 cm por ciclo.
 - **Borde perdido** (sin contacto por `bump_lost_timeout_s`, 10 s): búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s);
   si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
 - **Todos los parámetros de contacto están en el YAML** para ajustarlos en el robot (ángulos, distancias, velocidades y tiempos).
@@ -389,6 +396,10 @@ Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumpe
 control proporcional la mantiene en `target_distance` (0,30 m), con el bumper como contacto de respaldo; las esquinas exteriores se rodean con un arco. **Solo se
 usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar (queda un aviso en el log) y se sigue por bumper, sin fallar.
 
+- **Probado con dos formas de bumpers en el simulador:** `test_perimeter.py` da la vuelta completa (pared a derecha e izquierda y el cuarto de `sim_room.yaml`) con las zonas de bumper actuales
+  de `sim_world.py` y con las anteriores (esquinas compartidas, que hacían que un contacto lateral en la esquina presionara también B2/B5). Sin `perimeter_blocked` en ninguna. Con las zonas
+  actuales la vuelta tarda más (~790 s contra ~480 s en `sim_room`) porque la esquina se resuelve por falta de progreso en vez de por el bumper frontal. **Pendiente:** la disposición real de
+  los bumpers en el chasis (el simulador todavía no la refleja).
 - **Limitación (simulación):** con el cuerpo rígido, en una esquina interior pegado a la pared el robot no puede girar sin que la cola roce; el retroceso en arco
   (`unstick_*`) lo resuelve en el cuarto simulado, pero con paredes reales conviene ajustar `contact_*` y `unstick_*` en el robot.
 - **IMPORTANTE (a medir):** en el URDF los tres sonares miran al frente (`rpy 0`); el ángulo real de montaje del sonar lateral hace falta solo para el refinamiento.
