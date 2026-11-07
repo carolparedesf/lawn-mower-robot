@@ -80,10 +80,10 @@ class LegacyBumperWorld(SimWorld):
                 for name, zone in self.ZONES.items()}
 
 
-def sim_room_world(cls):
+def sim_room_world(cls, **kw):
     """El cuarto de config/sim_room.yaml: 10 x 8 m con un bloque central y un obstaculo circular."""
     walls = list(SimWorld.room(10.0, 8.0).walls) + list(SimWorld.box(4.0, 3.0, 7.0, 5.0))
-    return cls(walls=walls, circles=[(2.0, 6.0, 0.5)])
+    return cls(walls=walls, circles=[(2.0, 6.0, 0.5)], **kw)
 
 
 def reached(xy, **kw):
@@ -332,6 +332,17 @@ class EsquinasTests(unittest.TestCase):
                 with self.subTest(sim=cls.__name__, pose=use_pose):
                     log = self.lap(cls, 'right', (2.0, 1.0, 0.0), room=sim_room_world(cls), use_pose=use_pose)
                     self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0), 'no dio la vuelta completa')
+
+    def test_vuelta_con_esquinas_redondeadas_y_zona_muerta_entre_bumpers(self):
+        # Los valores de config/sim_room.yaml (radio 0.05, split 45) y uno mas redondeado, con y sin zona muerta, con la pose real
+        for radius in (0.05, 0.10):
+            for dead in (0.0, 20.0):
+                with self.subTest(radius=radius, dead=dead):
+                    world = sim_room_world(SimWorld, corner_radius=radius, corner_split_deg=45.0, corner_dead_deg=dead)
+                    log = self.lap(SimWorld, 'right', (2.0, 1.0, 0.0), room=world, use_pose=True)
+                    self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0), 'no dio la vuelta completa')
+                    # vuelve al sur tras pasar por las otras tres paredes
+                    self.assertTrue(any(x < 1.2 and y < 1.2 for x, y in log['xy'][len(log['xy']) // 3:]), 'no cerro la vuelta')
 
     # ── lógica pura ──
 

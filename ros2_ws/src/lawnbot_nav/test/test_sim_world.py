@@ -52,8 +52,9 @@ class SimWorldTests(unittest.TestCase):
 
     def test_lateral_derecho_en_las_esquinas_no_presiona_frontal_ni_trasero(self):
         from lawnbot_nav.safety_logic import SafetyParams, SafetyState, apply_safety
-        # pared sur pegada al costado derecho, con el robot al fondo (esquina trasera) y al frente (esquina delantera)
-        room = SimWorld.room(10.0, 8.0)
+        # una pared larga (sur) pegada al costado derecho: la esquina trasera y la delantera tambien quedan a 1 cm de ella
+        # (solo la pared sur: contra una pared al fondo o al frente si corresponde presionar B5 o B1/B2)
+        room = SimWorld(walls=[((-20.0, 0.0), (20.0, 0.0))])
         for x in (0.2463 + 0.01, 5.0, 10.0 - 0.2137 - 0.01):
             pressed = room.bumpers((x, 0.2127 + 0.01, 0.0))
             self.assertTrue(pressed['bumper/B4_right'], x)
@@ -99,6 +100,119 @@ class SimWorldTests(unittest.TestCase):
         for _ in range(200):
             self.room.step_robot(robot, 0.0, 0.6, 0.05)
             self.assertFalse(self.room.collides((robot.x, robot.y, robot.yaw)))
+
+
+
+class EsquinasRedondeadasTests(unittest.TestCase):
+    R = 0.15
+    ARCS = (  # (centro, signo x, signo y, bumper frontal/trasero, bumper lateral)
+        ('fl', +1, +1, 'bumper/B1_front_left', 'bumper/B3_left'),
+        ('fr', +1, -1, 'bumper/B2_front_right', 'bumper/B4_right'),
+        ('bl', -1, +1, 'bumper/B5_back', 'bumper/B3_left'),
+        ('br', -1, -1, 'bumper/B5_back', 'bumper/B4_right'),
+    )
+
+    def angle(self, pt, sx, sy):
+        """Angulo del punto en su arco, desde la cara frontal/trasera (0) hacia la lateral (90)."""
+        from lawnbot_nav.sim_world import BODY_X, BODY_Y
+        cx = (BODY_X[1] - self.R) if sx > 0 else (BODY_X[0] + self.R)
+        cy = (BODY_Y[1] - self.R) if sy > 0 else (BODY_Y[0] + self.R)
+        return math.degrees(math.atan2(abs(pt[1] - cy), abs(pt[0] - cx)))
+
+    def arc_points(self, zones, sx, sy):
+        from lawnbot_nav.sim_world import BODY_X, BODY_Y
+        out = []
+        for name, pts in zones.items():
+            for p in pts:
+                in_x = (p[0] > BODY_X[1] - self.R) if sx > 0 else (p[0] < BODY_X[0] + self.R)
+                in_y = (p[1] > BODY_Y[1] - self.R) if sy > 0 else (p[1] < BODY_Y[0] + self.R)
+                if in_x and in_y:
+                    out.append((name, self.angle(p, sx, sy)))
+        return out
+
+    def test_radio_cero_es_el_cuerpo_rectangular_de_siempre(self):
+        from lawnbot_nav.sim_world import _BUMPER_ZONES, bumper_zones
+        self.assertEqual(bumper_zones(0.0), _BUMPER_ZONES)
+        self.assertEqual(SimWorld().zones, _BUMPER_ZONES)
+
+    def test_el_arco_se_reparte_en_el_split_sin_zona_muerta(self):
+        from lawnbot_nav.sim_world import bumper_zones
+        for split in (30.0, 45.0, 60.0):
+            zones = bumper_zones(self.R, split, 0.0)
+            for _, sx, sy, face, side in self.ARCS:
+                pts = self.arc_points(zones, sx, sy)
+                self.assertTrue(pts)
+                for name, a in pts:
+                    self.assertEqual(name, face if a < split - 1e-6 else side, (split, a, name))
+                self.assertTrue(any(n == face for n, _ in pts) and any(n == side for n, _ in pts))
+
+    def test_cada_punto_del_arco_es_de_un_solo_bumper(self):
+        from lawnbot_nav.sim_world import bumper_zones
+        zones = bumper_zones(self.R, 45.0, 0.0)
+        owners = {}
+        for name, pts in zones.items():
+            for p in pts:
+                owners.setdefault((round(p[0], 6), round(p[1], 6)), set()).add(name)
+        shared = {p: n for p, n in owners.items() if len(n) > 1}
+        self.assertEqual(list(shared.values()), [{'bumper/B1_front_left', 'bumper/B2_front_right'}])   # solo el centro del frente
+
+    def test_la_zona_muerta_queda_sin_bumper(self):
+        from lawnbot_nav.sim_world import bumper_zones
+        zones = bumper_zones(self.R, 45.0, 20.0)
+        full = bumper_zones(self.R, 45.0, 0.0)
+        for _, sx, sy, face, side in self.ARCS:
+            angles = [a for _, a in self.arc_points(zones, sx, sy)]
+            self.assertFalse([a for a in angles if 35.0 + 1e-6 < a < 55.0 - 1e-6], 'hay puntos en la zona muerta')
+            self.assertTrue(any(a <= 35.0 + 1e-6 for a in angles) and any(a >= 55.0 - 1e-6 for a in angles))
+            self.assertLess(len(self.arc_points(zones, sx, sy)), len(self.arc_points(full, sx, sy)))
+
+    def test_pared_pegada_al_costado_solo_presiona_el_lateral_si_el_split_es_45(self):
+        # el costado derecho a 1 cm de la pared sur: con radio 0.15 el contacto de 2 cm toca el arco desde ~69 grados
+        for split, expected in ((45.0, {'bumper/B4_right'}), (80.0, {'bumper/B4_right', 'bumper/B2_front_right', 'bumper/B5_back'})):
+            room = SimWorld.room(10.0, 8.0, corner_radius=self.R, corner_split_deg=split)
+            pressed = {n for n, on in room.bumpers((5.0, 0.2127 + 0.01, 0.0)).items() if on}
+            self.assertEqual(pressed, expected, split)
+
+    def test_un_obstaculo_en_la_diagonal_de_la_esquina_cae_en_la_zona_muerta(self):
+        from lawnbot_nav.sim_world import BODY_X, BODY_Y
+        c = math.sqrt(0.5)
+        # punto del arco frontal derecho a 45 grados y un obstaculo diminuto a 0.5 cm hacia afuera
+        px = BODY_X[1] - self.R + self.R * c
+        py = BODY_Y[0] + self.R - self.R * c
+        ox, oy = px + 0.005 * c, py - 0.005 * c
+        for dead, expected in ((0.0, {'bumper/B4_right', 'bumper/B2_front_right'}), (40.0, set())):
+            world = SimWorld(circles=[(5.0 + ox, 5.0 + oy, 0.001)], corner_radius=self.R, corner_dead_deg=dead)
+            pressed = {n for n, on in world.bumpers((5.0, 5.0, 0.0)).items() if on}
+            if dead == 0.0:
+                self.assertTrue(pressed <= expected and pressed, pressed)      # el contacto de 2 cm abarca ambos lados del split
+            else:
+                self.assertEqual(pressed, expected)                            # zona muerta de 40 grados: ninguno
+
+    def test_el_cuerpo_redondeado_pasa_donde_el_rectangular_choca(self):
+        from lawnbot_nav.sim_world import BODY_X, BODY_Y
+        ox, oy = BODY_X[1] + 0.012, BODY_Y[0] - 0.012            # junto a la esquina delantera derecha
+        circle = [(5.0 + ox, 5.0 + oy, 0.02)]
+        self.assertTrue(SimWorld(circles=circle).collides((5.0, 5.0, 0.0)))
+        self.assertFalse(SimWorld(circles=circle, corner_radius=self.R).collides((5.0, 5.0, 0.0)))
+
+    def test_el_cuerpo_redondeado_sigue_chocando_de_frente_y_de_lado(self):
+        room = SimWorld.room(10.0, 8.0, corner_radius=self.R)
+        robot = SimRobot(8.0, 4.0, 0.0)
+        collided = False
+        for _ in range(400):
+            collided |= room.step_robot(robot, 0.2, 0.0, 0.05)
+        self.assertTrue(collided)
+        self.assertLess(robot.x + 0.2137, 10.0 + 1e-6)
+        self.assertTrue(room.collides((5.0, 0.2127 - 0.01, 0.0)))
+        self.assertFalse(room.collides((5.0, 0.2127 + 0.01, 0.0)))
+
+    def test_sim_room_yaml_tiene_los_parametros_de_las_esquinas(self):
+        import os
+        import yaml
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'sim_room.yaml')
+        cfg = yaml.safe_load(open(path))['fake_robot']['ros__parameters']
+        self.assertGreater(cfg['corner_radius'], 0.0)
+        self.assertEqual((cfg['corner_split_deg'], cfg['corner_dead_deg']), (45.0, 0.0))
 
 
 if __name__ == '__main__':
