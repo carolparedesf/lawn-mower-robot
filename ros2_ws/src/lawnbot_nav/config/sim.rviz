@@ -75,7 +75,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Class: rviz_default_plugins/TopDownOrthographic
+      Class: rviz_default_plugins/TopDownOrtho
       Name: Vista cenital
       Scale: 60
       X: 5
