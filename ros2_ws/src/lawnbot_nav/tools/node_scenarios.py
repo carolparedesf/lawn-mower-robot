@@ -1708,6 +1708,145 @@ def run_sim_view():
     check(math.dist((last.x, last.y), (n.robot.x, n.robot.y)) < 0.1, 'la ultima pose del rastro es la actual')
 
 
+def run_random_fence_arrival():
+    print('\n[20] random_walk: cerco tardio, WAITING_CONVERSION y recuperacion fuera del cerco (como nodo)')
+    import yaml
+    from lawnbot_nav.random_walk import RandomWalk
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'random_walk.yaml')))['random_walk']['ros__parameters']
+    check(cfg['require_geofence'] is True and cfg['edge_margin'] == 0.5 and cfg['max_outside_recovery'] == 1.0,
+          'random_walk.yaml: cerco requerido, edge_margin 0,5 m y max_outside_recovery 1,0 m')
+    n = make(RandomWalk, **dict(cfg, seed=1))
+    check(n.get_logger().has('cerco requerido: True'), 'el log dice "cerco requerido: True"')
+    tick = n.timer(0.05)
+    sent = n.pubs['cmd_vel_random']
+    alerts = lambda: [m.data for m in n.pubs['nav/alert_in'].sent]   # noqa: E731
+    fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+    state = {'pose': (0.30, 4.41, 0.0)}
+
+    def feed_sensors():
+        t = R.MONO['t']
+        for s in ('left', 'center', 'right'):
+            n.cache.set(f'sonar/{s}', 1.5, t)
+        for b in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left', 'bumper/B4_right', 'bumper/B5_back'):
+            n.cache.set(b, 0.0, t)
+
+    def run(seconds, edge='real'):
+        for _ in range(int(seconds / 0.05)):
+            R.advance(0.05)
+            R.set_pose('map', 'base_footprint', *state['pose'])
+            feed_sensors()
+            n.subs['nav/active_mode'](R.String('auto_random'))      # el modo se renueva (vence a los 3 s)
+            if edge == 'real':
+                n.subs['geofence/distance_to_edge'](R.Float32(signed_distance_xy(state['pose'][:2], fence)))
+            elif edge == 'nan':
+                n.subs['geofence/distance_to_edge'](R.Float32(float('nan')))
+            tick()
+
+    n.subs['nav/active_mode'](R.String('auto_random'))
+    run(2.0, edge=None)
+    check(sent.last.linear.x == 0.0 and sent.last.angular.z == 0.0 and 'random:geofence_not_ready' in alerts(),
+          'activo y todavia sin ningun cerco ni status: quieto y avisa geofence_not_ready')
+    n.subs['geofence/status'](R.String('NO_POLYGON'))
+    run(1.0, edge='nan')
+    check(sent.last.linear.x == 0.0, 'NO_POLYGON: quieto')
+    n.subs['geofence/status'](R.String('WAITING_CONVERSION'))
+    run(1.0, edge='nan')
+    check(sent.last.linear.x == 0.0 and sent.last.angular.z == 0.0, 'WAITING_CONVERSION (distancia NaN): quieto')
+    check(all(m.linear.x == 0.0 and m.angular.z == 0.0 for m in sent.sent), 'en todo ese tiempo nunca publico movimiento')
+    n.subs['geofence/status'](R.String('OK'))
+    run(1.0, edge=None)                                    # status OK pero sin distancia vigente (el nodo del cerco no publica)
+    check(sent.last.linear.x == 0.0, 'status OK pero sin distancia_to_edge vigente: quieto')
+
+    # llega el cerco con el robot en marcha y ya afuera (0,30 m: 0,20 m fuera del borde en x = 0,5)
+    n.subs['geofence/polygon'](_polygon(fence))
+    before = len(sent.sent)
+    run(1.0)
+    moved = sent.sent[before:]
+    check(any(abs(m.angular.z) > 0.0 or m.linear.x != 0.0 for m in moved), 'llega el cerco con el robot afuera: entra en recuperacion, no se congela')
+    check(n.core.state == 'RECOVER' and 'random:outside_fence' not in alerts()[-3:], '   estado RECOVER, sin alerta (esta a 0,2 m del borde)')
+    check(abs(sent.last.linear.x - 0.1) < 1e-9 and abs(sent.last.angular.z) <= 0.3, '   mira al centroide (al este): avanza despacio a 0,1 m/s corrigiendo el rumbo')
+    check(all(m.linear.x <= 0.1 + 1e-9 for m in moved), '   avanza como mucho a recover_speed (0,1 m/s)')
+
+    # a 2 m fuera del cerco: quieto y alerta outside_fence
+    state['pose'] = (-1.5, 4.41, 0.0)
+    run(1.5)
+    check(sent.last.linear.x == 0.0 and sent.last.angular.z == 0.0 and 'random:outside_fence' in alerts(),
+          'a 2 m del borde (mas que max_outside_recovery): quieto y avisa outside_fence')
+    # sin centroide (se pierde el poligono) estando cerca: tambien quieto
+    state['pose'] = (0.30, 4.41, 0.0)
+    n.centroid = None
+    n_alerts = len(alerts())
+    run(1.5)
+    check(sent.last.linear.x == 0.0 and sent.last.angular.z == 0.0 and 'random:outside_fence' in alerts()[n_alerts:],
+          'afuera y sin datos del centroide: quieto y avisa outside_fence')
+    n.subs['geofence/polygon'](_polygon(fence))
+    run(0.5)
+    check(n.core.state == 'RECOVER' and sent.last.linear.x > 0.0, 'vuelve el poligono: retoma la recuperacion (avanza despacio)')
+    state['pose'] = (3.0, 4.41, 0.0)                         # adentro
+    run(1.0)
+    check(n.core.state != 'RECOVER', 'de vuelta adentro del cerco: sale de la recuperacion')
+
+
+def run_geofence_restore_equals_topic():
+    print('\n[21] geofence_node: el cerco restaurado de ~/.ros/lawnbot_geofence.json se comporta igual que el recibido por topic')
+    from lawnbot_nav.geofence_node import GeofenceNode
+    tmp = tempfile.mkdtemp()
+    persist = os.path.join(tmp, 'cerco.json')
+
+    def observe(g, poses):
+        tick, maintain = g.timer(0.1), g.timer(1.0)
+        out = []
+        for pose in poses:
+            for _ in range(5):
+                R.advance(0.1)
+                R.set_pose('map', 'base_footprint', *pose)
+                tick()
+            maintain()
+            out.append((g.pubs['geofence/status'].last.data, g.pubs['geofence/inside'].last.data,
+                        round(g.pubs['geofence/distance_to_edge'].last.data, 3)))
+        poly = [(round(p.x, 3), round(p.y, 3)) for p in g.pubs['geofence/polygon'].last.polygon.points]
+        return out, poly, g.pubs['geofence/polygon'].last.header.frame_id
+
+    poses = [(10.0, 11.0), (40.0, 11.0), (10.0, 11.0)]
+    # datum
+    R.set_pose('map', 'base_footprint', 10.0, 11.0)
+    a = make(GeofenceNode, conversion_mode='datum', datum_lat=LAT0, datum_lng=LNG0, persist_path=persist, hysteresis_in=2, hysteresis_out=2)
+    a.subs['geofence_raw'](R.String(geo_json(SQUARE_LL)))
+    ra = observe(a, poses)
+    b = make(GeofenceNode, conversion_mode='datum', datum_lat=LAT0, datum_lng=LNG0, persist_path=persist, hysteresis_in=2, hysteresis_out=2)
+    check(b.get_logger().has('cerco restaurado'), 'datum: el nodo nuevo restaura el cerco del archivo')
+    rb = observe(b, poses)
+    check(ra == rb and ra[0][0][0] == 'OK', f'datum: mismo status/inside/distancia/poligono que el recibido por topic ({ra[0][0]})')
+
+    # navsat: el servicio fromLL contesta como navsat_transform
+    def answer(client, offset):
+        for req, fut in client.calls:
+            x, y = lat_lon_to_local_xy(req.ll_point.latitude, req.ll_point.longitude, LAT0, LNG0)
+            fut.resolve(R.Msg(map_point=R.Msg(x=x + offset[0], y=y + offset[1])))
+        client.calls.clear()
+
+    def navsat(restore):
+        g = make(GeofenceNode, conversion_mode='navsat', persist_path=persist if restore else '', hysteresis_in=2, hysteresis_out=2)
+        client = g.clients['fromLL']
+        if not restore:
+            g.subs['geofence_raw'](R.String(geo_json(SQUARE_LL)))
+        maintain = g.timer(1.0)
+        R.set_pose('map', 'base_footprint', 10.0, 11.0)
+        g.timer(0.1)()
+        first = (g.pubs['geofence/status'].last.data if g.pubs['geofence/status'].last else None)
+        client.ready = True
+        maintain()                                          # el servicio aparece: reconvierte
+        answer(client, (0.0, 0.0))
+        return g, first
+
+    ga, first_a = navsat(False)
+    gb, first_b = navsat(True)
+    check(len(gb.raw) == 4, 'navsat: el nodo nuevo restaura 4 vertices lat/lon del archivo')
+    ra, rb = observe(ga, poses), observe(gb, poses)
+    check(ra == rb and ra[0][0][0] == 'OK', f'navsat: mismo resultado tras la conversion ({ra[0][0]})')
+    check(gb.stale is False and gb.poly is not None, '   el restaurado queda convertido y vigente, igual que el otro')
+
+
 def run_sonar_prefix():
     print('\n[16] consumidores de sonares: leen sonar_filtered/* con sonar_topic_prefix (y sonar/* por defecto)')
     import yaml
@@ -1871,4 +2010,6 @@ if __name__ == '__main__':
     run_gate_hysteresis()
     run_perimeter_pose()
     run_sim_view()
+    run_random_fence_arrival()
+    run_geofence_restore_equals_topic()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

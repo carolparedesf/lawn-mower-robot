@@ -291,7 +291,7 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
 El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
 `/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
-`obstacle_stop`, `estop`, `geofence_breach`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+`obstacle_stop`, `estop`, `geofence_breach`, `outside_fence`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
 El bridge la manda como `alert` en `robot/status`.
 
 ## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
@@ -357,7 +357,7 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
 |---|---|
 | obstáculo | mínimo de los sonares < `obstacle_distance` (0,50 m) |
 | bumper | B1, B2, B3 o B4 presionados (B5 corta el retroceso) |
-| borde | `/geofence/distance_to_edge` < `edge_distance` (1,5 m) **y** se está acercando, o < `edge_hard_distance` (0,5 m) |
+| borde | `/geofence/distance_to_edge` < `edge_distance` (1,5 m) **y** se está acercando; o < `edge_margin` (0,5 m) **y** avanza hacia el borde (la distancia baja, aunque sea en diagonal, o mira hacia afuera del centroide) |
 
 - **Semilla configurable** (`seed`; `-1` = al azar): misma semilla y mismas entradas, misma secuencia de giros.
 - **Giros por tiempo** (sin realimentación de rumbo): entre 60° y 180° al azar tras un obstáculo o bumper.
@@ -367,6 +367,15 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
 - **Falla segura:** con un sensor requerido sin datos (sonares habilitados o B1/B2) por más de `sensor_timeout`, o sin `/geofence/status` `OK` y
   distancia vigente (`require_geofence: true`), **no se mueve** y avisa (`random:sensor_timeout`, `random:geofence_not_ready`). Con `edge_distance`
   se puede arrancar dentro de la franja del borde: solo dispara si se acerca, así sale hacia adentro en vez de retroceder en bucle.
+- **Margen del borde (`edge_margin`, 0,5 m):** dentro del margen y avanzando hacia el borde hace la maniobra de borde (retroceso y giro al centroide) **antes de cruzarlo**. Si ya mira al interior no dispara
+  (antes disparaba siempre, y el retroceso lo llevaba hacia el borde). El retroceso se corta si el borde queda a menos de `edge_backup_stop_distance` (0,15 m) y se sigue acercando.
+- **Fuera del cerco (distancia negativa) → recuperación:** a menos de `max_outside_recovery` (1,0 m) del borde **gira en el lugar hacia el centroide** y **avanza despacio** (`recover_speed`, 0,1 m/s) hasta volver a
+  entrar. Si hay un obstáculo adelante (`obstacle_distance` o bumper frontal, lo mismo que frenaría el `safety_gate`) **gira más** antes de avanzar y, al despejarse, avanza recto `recover_clear_time_s` (1,5 s);
+  si la cola o un costado rozan (bumper trasero o lateral) **avanza** en vez de girar. A más de `max_outside_recovery`, sin el centroide (`/geofence/polygon` o pose) o pasados `recover_timeout_s` (60 s)
+  **se queda quieto y avisa `random:outside_fence`**. Un cerco nuevo que llega con el robot en marcha y lo deja afuera entra en esta recuperación; mientras el cerco se reconvierte (`WAITING_CONVERSION`, distancia NaN)
+  sigue quieto (`geofence_not_ready`). Si nunca llegó un cerco o el status no es `OK`, no se mueve (`require_geofence: true`; el log dice `cerco requerido: True`).
+- **Cerco restaurado de `~/.ros/lawnbot_geofence.json`:** `geofence_node` lo trata igual que uno recibido por `/geofence_raw` (mismo `accept_raw`; solo no lo vuelve a guardar), en `datum` y en `navsat`
+  (en `navsat` queda `WAITING_CONVERSION` hasta que `fromLL` responde, como el recibido). Escenario [21] de `tools/node_scenarios.py`.
 - Atrapado (6 disparos en 30 s): alerta `random_blocked`.
 - **Límite conocido:** del borde solo se conoce una distancia (no la dirección), así que en una esquina del cerco puede rebotar entre dos bordes un rato.
 
