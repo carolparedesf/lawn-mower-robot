@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from lawnbot_nav.perimeter_logic import (CONTACT_BACK, CONTACT_TURN, CORNER, FAILED, FOLLOW, SEARCH_ARC,
+from lawnbot_nav.perimeter_logic import (CONTACT_BACK, CONTACT_FWD, CONTACT_TURN, CORNER, CORNER_BACK, FAILED, FOLLOW, SEARCH_ARC,
                                          SEARCH_FORWARD, UNSTICK, PerimeterCore, PerimeterInputs, PerimeterParams)
 from lawnbot_nav.sim_robot import SimRobot
 from lawnbot_nav.sim_world import SimWorld
@@ -48,6 +48,41 @@ def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None):
         t += DT
     log['failed_at'] = t if core.state == FAILED else None
     return core, robot, log
+
+
+def _legacy_zones():
+    """Zonas de bumper del sim_world de antes (96ad7fd): las esquinas del cuerpo tambien eran del bumper lateral Y del frontal/trasero
+    (un contacto lateral en la esquina presionaba dos bumpers). Se conservan aqui para probar que el perimetral no depende de eso."""
+    from lawnbot_nav.sim_world import BODY_X, BODY_Y
+    x0, x1 = BODY_X
+    y0, y1 = BODY_Y
+
+    def span(a, b):
+        n = max(1, int(round(abs(b - a) / 0.03)))
+        return [a + (b - a) * i / n for i in range(n + 1)]
+    return {
+        'bumper/B1_front_left': [(x1, y) for y in span(0.0, y1)],
+        'bumper/B2_front_right': [(x1, y) for y in span(y0, 0.0)],
+        'bumper/B3_left': [(x, y1) for x in span(x0, x1)],
+        'bumper/B4_right': [(x, y0) for x in span(x0, x1)],
+        'bumper/B5_back': [(x0, y) for y in span(y0, y1)],
+    }
+
+
+class LegacyBumperWorld(SimWorld):
+    """SimWorld con las zonas de bumper anteriores (esquinas compartidas)."""
+    ZONES = _legacy_zones()
+
+    def bumpers(self, pose):
+        from lawnbot_nav.sim_world import BUMPER_CONTACT, _to_world
+        return {name: any(self.distance(_to_world(pose, *pt)) <= BUMPER_CONTACT for pt in zone)
+                for name, zone in self.ZONES.items()}
+
+
+def sim_room_world(cls):
+    """El cuarto de config/sim_room.yaml: 10 x 8 m con un bloque central y un obstaculo circular."""
+    walls = list(SimWorld.room(10.0, 8.0).walls) + list(SimWorld.box(4.0, 3.0, 7.0, 5.0))
+    return cls(walls=walls, circles=[(2.0, 6.0, 0.5)])
 
 
 def reached(xy, **kw):
@@ -269,6 +304,121 @@ class SonarRefinementTests(unittest.TestCase):
         xy = log['xy']
         self.assertTrue(any(y > 5.2 for x, y in xy) and any(x > 7.2 for x, y in xy)
                         and any(y < 2.8 for x, y in xy) and any(x < 3.8 for x, y in xy))
+
+
+
+class EsquinasTests(unittest.TestCase):
+    """Que el perimetral no dependa de que bumpers toque el chasis en la esquina (se prueban las dos formas del sim)."""
+
+    def lap(self, cls, side, start, room=None):
+        world = room or cls(walls=SimWorld.room(10.0, 8.0).walls)
+        core, robot, log = simulate(world, PerimeterParams(side=side), start=start, tmax=900.0)
+        self.assertNotEqual(core.state, FAILED, f'{cls.__name__} {side}: {core.fail_reason} en ({robot.x:.2f}, {robot.y:.2f})')
+        self.assertNotIn('perimeter_blocked', log['alerts'])
+        return log
+
+    def test_vuelta_completa_con_las_dos_formas_de_bumpers(self):
+        for cls in (SimWorld, LegacyBumperWorld):
+            for side, start in (('right', (2.0, 0.7, 0.0)), ('left', (2.0, 7.3, 0.0))):
+                with self.subTest(sim=cls.__name__, side=side):
+                    log = self.lap(cls, side, start)
+                    self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0, s=1.0) or reached(log['xy'], n=7.0, e=9.0, w=1.0),
+                                    'no dio la vuelta completa')
+
+    def test_vuelta_al_cuarto_de_sim_room_con_las_dos_formas_de_bumpers(self):
+        for cls in (SimWorld, LegacyBumperWorld):
+            with self.subTest(sim=cls.__name__):
+                log = self.lap(cls, 'right', (2.0, 1.0, 0.0), room=sim_room_world(cls))
+                self.assertTrue(reached(log['xy'], n=7.0, e=9.0, w=1.0), 'no dio la vuelta completa')
+
+    # ── lógica pura ──
+
+    def test_en_la_esquina_un_contacto_lateral_retrocede_antes_de_seguir_girando(self):
+        p = PerimeterParams(side='right')
+        core = PerimeterCore(p)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=1.5), 0.0)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), 0.1)
+        self.assertEqual(core.state, CORNER)
+        v, w = core.update(PerimeterInputs(sensors_ok=True, center_range=0.3, side_bumper=True), 0.2)
+        self.assertEqual((core.state, v, w), (CORNER_BACK, -p.contact_back_speed, 0.0))
+        t = 0.2 + p.corner_back_distance / p.contact_back_speed
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), t - 0.05)
+        self.assertEqual(core.state, CORNER_BACK)
+        v, w = core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), t + 0.01)
+        self.assertEqual((core.state, v), (CORNER, 0.0))
+        self.assertGreater(w, 0.0)                               # sigue girando alejandose de la pared
+
+    def test_si_el_retroceso_no_libera_la_esquina_avanza_en_vez_de_repetirlo(self):
+        p = PerimeterParams(side='right')
+        core = PerimeterCore(p)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=1.5), 0.0)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), 0.1)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3, side_bumper=True), 0.2)
+        t = 0.2 + p.corner_back_distance / p.contact_back_speed + 0.01
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3, side_bumper=True), t)
+        v, w = core.update(PerimeterInputs(sensors_ok=True, center_range=0.3, side_bumper=True), t + 0.05)
+        self.assertEqual((core.state, v), (CONTACT_FWD, p.contact_forward_speed))
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), t + 0.1 + p.contact_forward_time_s)
+        self.assertEqual(core.state, CORNER)                     # y vuelve a la esquina, no a FOLLOW
+
+    def test_el_bumper_trasero_en_la_esquina_avanza(self):
+        p = PerimeterParams(side='right')
+        core = PerimeterCore(p)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=1.5), 0.0)
+        core.update(PerimeterInputs(sensors_ok=True, center_range=0.3), 0.1)
+        v, w = core.update(PerimeterInputs(sensors_ok=True, center_range=0.3, side_bumper=True, back_bumper=True), 0.2)
+        self.assertEqual((core.state, v), (CONTACT_FWD, p.contact_forward_speed))
+
+    def _ciclo(self, core, t, avance, kind_front=False):
+        """Un ciclo: avanza `avance` m en FOLLOW y toca el bumper lateral. Devuelve el instante final y el estado tras el toque."""
+        free = PerimeterInputs(sensors_ok=True, center_range=1.5)
+        end = t + avance / 0.15
+        while t < end:
+            core.update(free, t)
+            t += 0.05
+        core.update(PerimeterInputs(sensors_ok=True, center_range=1.5, side_bumper=True), t)
+        back_time = core.p.contact_back_distance / core.p.contact_back_speed
+        t += back_time + 0.05
+        core.update(free, t)                                     # termina el retroceso
+        return t, core.contact_kind
+
+    def test_tres_contactos_laterales_sin_avance_se_tratan_como_esquina(self):
+        p = PerimeterParams(side='right')
+        core = PerimeterCore(p)
+        core.state = FOLLOW
+        t, kinds = 0.0, []
+        for _ in range(3):
+            t, kind = self._ciclo(core, t, avance=0.30)          # 0.30 de ida y 0.10 de vuelta: neto 0.20 (suficiente)
+            kinds.append(kind)
+            core.state = FOLLOW
+        self.assertEqual(kinds, ['side'] * 3)
+        core = PerimeterCore(p)
+        core.state = FOLLOW
+        t, kinds = 0.0, []
+        for _ in range(3):
+            t, kind = self._ciclo(core, t, avance=0.12)          # 0.12 de ida y 0.10 de vuelta: neto 0.02 m
+            kinds.append(kind)
+            core.state = FOLLOW
+        self.assertEqual(kinds, ['side', 'side', 'front'])       # el tercero es esquina: giro de 45 grados
+        self.assertEqual(core.stalled, 0)
+
+    def test_contactos_con_avance_suficiente_no_son_esquina(self):
+        core = PerimeterCore(PerimeterParams(side='right'))
+        core.state = FOLLOW
+        t = 0.0
+        for _ in range(6):
+            t, kind = self._ciclo(core, t, avance=0.60)
+            self.assertEqual(kind, 'side')
+            core.state = FOLLOW
+
+    def test_stalled_contacts_cero_lo_apaga(self):
+        core = PerimeterCore(PerimeterParams(side='right', stalled_contacts=0))
+        core.state = FOLLOW
+        t = 0.0
+        for _ in range(6):
+            t, kind = self._ciclo(core, t, avance=0.12)
+            self.assertEqual(kind, 'side')
+            core.state = FOLLOW
 
 
 if __name__ == '__main__':

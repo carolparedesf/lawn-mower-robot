@@ -8,7 +8,11 @@ Refinamiento opcional (`use_side_sonar`, solo con `side_sonar_angle_deg` valido)
 pared mide la distancia lateral y un control proporcional la mantiene, con el bumper como contacto de
 respaldo. Si el angulo no es valido, el sonar se ignora y se sigue por bumper.
 
-Esquina interior: el sonar central o el bumper frontal disparan el giro. Esquina exterior / contacto
+Esquina interior: el sonar central o el bumper frontal disparan el giro. Si durante ese giro se presiona el
+bumper lateral, retrocede `corner_back_distance` antes de seguir girando (la cola no barre la pared); si lo que
+toca es el bumper trasero, avanza un poco. Ademas, `stalled_contacts` contactos laterales seguidos avanzando
+menos de `stalled_progress_distance` entre uno y otro se tratan como esquina (retroceso y giro frontal), sin
+depender de que el chasis presione tambien un bumper frontal. Esquina exterior / contacto
 perdido: busqueda acotada y, si falla, FAILED con alerta.
 """
 import math
@@ -19,6 +23,7 @@ SEARCH_FORWARD = 'SEARCH_FORWARD'
 SEARCH_ARC = 'SEARCH_ARC'
 FOLLOW = 'FOLLOW'
 CORNER = 'CORNER'
+CORNER_BACK = 'CORNER_BACK'
 CONTACT_BACK = 'CONTACT_BACK'
 CONTACT_TURN = 'CONTACT_TURN'
 CONTACT_FWD = 'CONTACT_FWD'
@@ -61,6 +66,12 @@ class PerimeterParams:
     corner_turn_speed: float = 0.6
     corner_clear_ratio: float = 1.3
     corner_timeout_s: float = 8.0
+    corner_back_distance: float = 0.12   # m: retroceso si se presiona el bumper lateral girando en una esquina
+
+    # ── Esquina por falta de progreso ──
+    # N contactos laterales seguidos con menos de X m de avance entre uno y otro = esquina (giro frontal). 0 = apagado
+    stalled_contacts: int = 3
+    stalled_progress_distance: float = 0.15   # m, avance neto ordenado (avance menos retroceso) entre dos contactos
 
     # ── Refinamiento opcional con el sonar lateral ──
     use_side_sonar: bool = False
@@ -116,11 +127,26 @@ class PerimeterCore:
         self.contact_kind = 'side'
         self.unstick_count = 0
         self.lateral: Optional[float] = None
+        self.corner_since = now
+        self.travel = 0.0                    # m netos avanzados (ordenado, con signo) desde el ultimo contacto
+        self.corner_backs = 0                # retrocesos hechos en la esquina actual
+        self.prev_state = FOLLOW
+        self.stalled = 0                     # contactos laterales seguidos con poco avance
+        self._last_now: Optional[float] = None
+        self._last_v = 0.0
 
     # ── Ciclo ────────────────────────────────────────────────
 
     def update(self, inp: PerimeterInputs, now: float):
         """Devuelve (v, w). `self.alert` queda con la alerta vigente."""
+        dt = 0.0 if self._last_now is None else max(0.0, min(now - self._last_now, 1.0))
+        self._last_now = now
+        self.travel += self._last_v * dt                    # avance neto ordenado (v*dt, con signo) desde el contacto
+        v, w = self._step(inp, now)
+        self._last_v = v
+        return v, w
+
+    def _step(self, inp: PerimeterInputs, now: float):
         p = self.p
         self.alert = None
         if self.state == FAILED:
@@ -174,7 +200,7 @@ class PerimeterCore:
                 return 0.0, -self.sign * p.contact_turn_speed
         if self.state == CONTACT_FWD:
             if now - self.state_since >= p.contact_forward_time_s:
-                self._set(FOLLOW, now)
+                self._set(CORNER if self.prev_state == CORNER else FOLLOW, now)   # desde una esquina, sigue en ella
                 self.lost_since = None
                 self.last_contact = now
             else:
@@ -183,25 +209,49 @@ class PerimeterCore:
         # Esquina interior detectada por el sonar central, antes de tocar
         center_blocked = (p.use_center_sonar and inp.center_range is not None
                           and inp.center_range < p.obstacle_distance)
+        if self.state == CORNER_BACK:
+            if now - self.state_since >= p.corner_back_distance / p.contact_back_speed or inp.back_bumper:
+                self._set(CORNER, now)                        # sigue la misma esquina: corner_since no se renueva
+            else:
+                return -p.contact_back_speed, 0.0
         if self.state == CORNER:
             clear = (not inp.front_bumper and (inp.center_range is None or
                                                 inp.center_range > p.obstacle_distance * p.corner_clear_ratio))
             if clear:
                 self._set(FOLLOW, now)
                 self.lost_since = None
-            elif now - self.state_since > p.corner_timeout_s:
+            elif now - self.corner_since > p.corner_timeout_s:
                 return self._stuck(now)
+            elif inp.back_bumper or (inp.side_bumper and self.corner_backs >= 1):
+                # La cola toca (no se puede retroceder), o ya se retrocedio una vez y sigue tocando (con el rumbo hacia
+                # la esquina, retroceder arrastra la cola contra la pared): se avanza para liberarla.
+                self._set(CONTACT_FWD, now)
+                return p.contact_forward_speed, 0.0
+            elif inp.side_bumper:                             # el giro arrastra la cola contra la pared: se separa antes
+                self.corner_backs += 1
+                self._set(CORNER_BACK, now)
+                return -p.contact_back_speed, 0.0
             else:
                 return 0.0, -self.sign * p.corner_turn_speed
         elif center_blocked and not contact and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
             self.last_contact = now                       # una pared al frente tambien cuenta como borde encontrado
             self._set(CORNER, now)
+            self.corner_since = now
+            self.corner_backs = 0
             return 0.0, -self.sign * p.corner_turn_speed
 
         # Contacto: retrocede y se aleja. Si toca la cola (bumper trasero) no se puede retroceder:
         # al reves, se avanza para liberarla.
         if (contact or inp.back_bumper) and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
             self.contact_kind = 'front' if inp.front_bumper else 'side'
+            if self.contact_kind == 'side' and p.stalled_contacts > 0:
+                self.stalled = self.stalled + 1 if self.travel < p.stalled_progress_distance else 0
+                if self.stalled >= p.stalled_contacts:        # no avanza: es una esquina aunque el chasis no toque al frente
+                    self.contact_kind = 'front'
+                    self.stalled = 0
+            else:
+                self.stalled = 0
+            self.travel = 0.0
             if inp.back_bumper:
                 self._set(CONTACT_FWD, now)
                 return p.contact_forward_speed, 0.0
@@ -295,5 +345,6 @@ class PerimeterCore:
         return 0.0, 0.0
 
     def _set(self, state: str, now: float) -> None:
+        self.prev_state = self.state
         self.state = state
         self.state_since = now

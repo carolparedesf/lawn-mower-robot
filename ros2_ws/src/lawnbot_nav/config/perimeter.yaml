@@ -29,6 +29,12 @@ perimeter:
     corner_turn_speed: 0.6
     corner_clear_ratio: 1.3
     corner_timeout_s: 8.0
+    corner_back_distance: 0.12     # m: si girando en la esquina se presiona el bumper lateral, retrocede esto antes de seguir
+
+    # Esquina por falta de progreso: stalled_contacts contactos laterales seguidos con menos de
+    # stalled_progress_distance de avance ordenado entre uno y otro se tratan como contacto frontal (giro de 45). 0 = apagado
+    stalled_contacts: 3
+    stalled_progress_distance: 0.15  # m
 
     # ── Refinamiento opcional: sonar lateral ──
     use_side_sonar: false          # solo se usa si ademas side_sonar_angle_deg es valido (>= 20)
