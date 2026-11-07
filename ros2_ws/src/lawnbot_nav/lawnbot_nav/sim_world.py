@@ -34,12 +34,14 @@ def _edge_samples():
     def span(a, b):
         n = max(1, int(round(abs(b - a) / step)))
         return [a + (b - a) * i / n for i in range(n + 1)]
+    def inner(a, b):                  # sin los extremos: las esquinas son de los bumpers laterales (si tambien fueran
+        return span(a, b)[1:-1]       # del frontal/trasero, una pared paralela a un costado los presionaria a ellos)
     return {
-        'bumper/B1_front_left': [(x1, y) for y in span(0.0, y1)],
-        'bumper/B2_front_right': [(x1, y) for y in span(y0, 0.0)],
+        'bumper/B1_front_left': [(x1, y) for y in span(0.0, y1)[:-1]],
+        'bumper/B2_front_right': [(x1, y) for y in span(y0, 0.0)[1:]],
         'bumper/B3_left': [(x, y1) for x in span(x0, x1)],
         'bumper/B4_right': [(x, y0) for x in span(x0, x1)],
-        'bumper/B5_back': [(x0, y) for y in span(y0, y1)],
+        'bumper/B5_back': [(x0, y) for y in inner(y0, y1)],
     }
 
 

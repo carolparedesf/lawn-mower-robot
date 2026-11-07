@@ -52,6 +52,10 @@ Parámetros: `ros2_ws/src/lawnbot_nav/config/*.yaml` (umbrales, timeouts, sonare
 Alertas (`/nav/safety_alert` → campo `alert` de `robot/status`): `none`, `sensor_timeout`,
 `bumper_front`, `bumper_back`, `obstacle_stop`, `obstacle_near`.
 
+`bumper_front` sale solo de `bumper_front_topics` (B1, B2) y `bumper_back` solo de `bumper_back_topics` (B5). Los laterales (B3, B4,
+`bumper_monitor_topics`) son de monitoreo: no generan ninguna alerta. En el simulador (`sim_world`), las esquinas del cuerpo pertenecen
+a los bumpers laterales, para que una pared pegada a un costado no presione también B2 o B5.
+
 ## Instalación (en la Pi)
 
 ```bash
@@ -233,6 +237,11 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 - **Precisión:** con el error típico de un GPS común (2–3 m), `inside` y la distancia no son más exactos que eso.
   El margen de seguridad frente al borde tiene que ser mayor que ese error.
 
+- **Conversión desde `nav.launch.py`:** argumentos `geofence_conversion_mode` (`navsat` por defecto, o `datum`), `datum_lat` y `datum_lng`
+  (0.0 por defecto); se pasan al `geofence_node` **después** de `geofence.yaml`, así que lo pisan. Para probar sin GPS:
+  `ros2 launch lawnbot_nav nav.launch.py geofence_conversion_mode:=datum datum_lat:=-25.3 datum_lng:=-57.6`. El nodo **no** aplica
+  `conversion_mode` en caliente con `ros2 param set`: hay que lanzarlo con el modo ya elegido. `datum` con `datum_lat`/`datum_lng` en 0.0 es un error y el nodo no arranca.
+
 **Cómo probarlo**
 1. Sin ROS: `cd ros2_ws/src/lawnbot_nav && PYTHONPATH=. python3 test/test_geofence.py`.
 2. Nodos sin ROS (capa de ROS falsa, solo en una máquina **sin** ROS 2): `python3 tools/node_scenarios.py`.
@@ -326,7 +335,7 @@ ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map  # seguidor en f
    ros2 run lawnbot_nav geofence_node --ros-args -p conversion_mode:=datum -p datum_lat:=-25.3 -p datum_lng:=-57.6   # si no corre ya con nav.launch.py
    ros2 run lawnbot_nav fake_robot --ros-args -p frame_id:=map -p x:=0.5 -p y:=0.5 -p cmd_topic:=cmd_vel
    ```
-   (con `nav.launch.py` el `geofence_node` ya está; ajustarle `conversion_mode:=datum` por parámetro para esta prueba). Publicar un cerco convexo (ver el
+   (con `nav.launch.py` el `geofence_node` ya está; para esta prueba lanzarlo con `ros2 launch lawnbot_nav nav.launch.py geofence_conversion_mode:=datum datum_lat:=-25.3 datum_lng:=-57.6`). Publicar un cerco convexo (ver el
    Bloque A), esperar `/geofence/status` en `OK`, pasar a `auto_parallel` (`ros2 topic pub -r 1 /robot_mode std_msgs/msg/String "{data: 'auto_parallel'}" --qos-durability transient_local --qos-reliability reliable`)
    y mirar `/coverage/status` y `/coverage/markers` en RViz (`Fixed Frame: map`). Con un cerco en L debe dar `ERROR:poligono no convexo`.
 4. **Resultado en simulación** (cerco de 6 m × 5 m, `margin` 1,0 m): 13 líneas, 58,9 m; el seguidor lo completa en ~6,5 min cubriendo el
