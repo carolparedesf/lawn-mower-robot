@@ -40,6 +40,31 @@ class SimWorldTests(unittest.TestCase):
         self.assertTrue(pressed['bumper/B4_right'])
         self.assertFalse(pressed['bumper/B3_left'])
 
+    def test_las_esquinas_son_solo_de_los_laterales(self):
+        from lawnbot_nav.sim_world import _BUMPER_ZONES
+        owners = {}
+        for name, pts in _BUMPER_ZONES.items():
+            for p in pts:
+                owners.setdefault((round(p[0], 6), round(p[1], 6)), []).append(name)
+        # (el centro del frente es de B1 y B2 a la vez, a proposito; el resto no comparte nada)
+        shared = {p: n for p, n in owners.items() if len(n) > 1}
+        self.assertEqual(shared, {(0.2137, 0.0): ['bumper/B1_front_left', 'bumper/B2_front_right']})
+
+    def test_lateral_derecho_en_las_esquinas_no_presiona_frontal_ni_trasero(self):
+        from lawnbot_nav.safety_logic import SafetyParams, SafetyState, apply_safety
+        # pared sur pegada al costado derecho, con el robot al fondo (esquina trasera) y al frente (esquina delantera)
+        room = SimWorld.room(10.0, 8.0)
+        for x in (0.2463 + 0.01, 5.0, 10.0 - 0.2137 - 0.01):
+            pressed = room.bumpers((x, 0.2127 + 0.01, 0.0))
+            self.assertTrue(pressed['bumper/B4_right'], x)
+            others = [n for n, on in pressed.items() if on and n != 'bumper/B4_right']
+            self.assertEqual(others, [], x)
+            # lo que haria el safety_gate con estos bumpers: ninguna alerta de bumper
+            state = SafetyState(sonar_ranges={},
+                                front_pressed=pressed['bumper/B1_front_left'] or pressed['bumper/B2_front_right'],
+                                back_pressed=pressed['bumper/B5_back'])
+            self.assertEqual(apply_safety(0.3, 0.0, state, SafetyParams())[2], 'none')
+
     def test_el_robot_no_atraviesa_la_pared(self):
         robot = SimRobot(8.0, 4.0, 0.0)
         collided = False

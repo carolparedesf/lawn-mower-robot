@@ -19,6 +19,12 @@ def generate_launch_description():
     sonar_prefix = {'sonar_topic_prefix': ParameterValue(
         PythonExpression(["'sonar_filtered' if '", use_filter, "'.lower() == 'true' else 'sonar'"]), value_type=str)}
 
+    geofence_args = {
+        'conversion_mode': ParameterValue(LaunchConfiguration('geofence_conversion_mode'), value_type=str),
+        'datum_lat': ParameterValue(LaunchConfiguration('datum_lat'), value_type=float),
+        'datum_lng': ParameterValue(LaunchConfiguration('datum_lng'), value_type=float),
+    }
+
     # Cadena: bridge -> /cmd_vel_manual, stubs -> /cmd_vel_<patron>
     #         twist_mux -> /cmd_vel_mux -> safety_gate -> /cmd_vel (unico publicador) -> ESP32
     # Los tres modos automaticos tienen nodo real (coverage_parallel + waypoint_follower, random_walk,
@@ -34,6 +40,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('use_sonar_filter', default_value='true'),
+        # Cerco: navsat (servicio fromLL, el real) o datum (plano local, pruebas sin GPS). El nodo no aplica
+        # conversion_mode en caliente con `ros2 param set`: se elige aqui al lanzar. Estos argumentos pisan geofence.yaml.
+        DeclareLaunchArgument('geofence_conversion_mode', default_value='navsat'),
+        DeclareLaunchArgument('datum_lat', default_value='0.0'),
+        DeclareLaunchArgument('datum_lng', default_value='0.0'),
         DeclareLaunchArgument('use_parallel_stub', default_value='false'),
         DeclareLaunchArgument('use_random_stub', default_value='false'),
         DeclareLaunchArgument('use_perimeter_stub', default_value='false'),
@@ -57,7 +68,7 @@ def generate_launch_description():
              remappings=[('cmd_vel_out', 'cmd_vel_mux')]),
 
         Node(package='lawnbot_nav', executable='geofence_node', name='geofence_node',
-             output='screen', parameters=[cfg('geofence.yaml'), use_sim_time]),
+             output='screen', parameters=[cfg('geofence.yaml'), geofence_args, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='coverage_parallel', name='coverage_parallel',
              output='screen', parameters=[cfg('coverage.yaml'), use_sim_time]),
