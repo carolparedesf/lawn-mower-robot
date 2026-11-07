@@ -12,12 +12,14 @@ Esquina interior: el sonar central o el bumper frontal disparan el giro. Si dura
 bumper lateral, retrocede `corner_back_distance` antes de seguir girando (la cola no barre la pared); si lo que
 toca es el bumper trasero, avanza un poco. Ademas, `stalled_contacts` contactos laterales seguidos avanzando
 menos de `stalled_progress_distance` entre uno y otro se tratan como esquina (retroceso y giro frontal), sin
-depender de que el chasis presione tambien un bumper frontal. Esquina exterior / contacto
+depender de que el chasis presione tambien un bumper frontal. El avance se mide con la pose real (distancia
+entre las posiciones de dos contactos consecutivos, `PerimeterInputs.pose`); sin pose, con la integracion de
+v*dt (que cree que avanza un robot trabado), y `progress_source` dice cual se uso. Esquina exterior / contacto
 perdido: busqueda acotada y, si falla, FAILED con alerta.
 """
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 SEARCH_FORWARD = 'SEARCH_FORWARD'
 SEARCH_ARC = 'SEARCH_ARC'
@@ -100,6 +102,7 @@ class PerimeterInputs:
     side_bumper: bool = False
     front_bumper: bool = False
     back_bumper: bool = False
+    pose: Optional[Tuple[float, float]] = None   # (x, y) del robot en un frame fijo (odom/map); None = sin TF
 
 
 class PerimeterCore:
@@ -132,6 +135,9 @@ class PerimeterCore:
         self.corner_backs = 0                # retrocesos hechos en la esquina actual
         self.prev_state = FOLLOW
         self.stalled = 0                     # contactos laterales seguidos con poco avance
+        self.contact_pose: Optional[Tuple[float, float]] = None   # pose en el ultimo contacto lateral
+        self.progress_source = 'integrated'  # 'pose' | 'integrated': con que se midio el ultimo avance
+        self.last_progress = 0.0             # m medidos entre los dos ultimos contactos laterales
         self._last_now: Optional[float] = None
         self._last_v = 0.0
 
@@ -245,13 +251,15 @@ class PerimeterCore:
         if (contact or inp.back_bumper) and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
             self.contact_kind = 'front' if inp.front_bumper else 'side'
             if self.contact_kind == 'side' and p.stalled_contacts > 0:
-                self.stalled = self.stalled + 1 if self.travel < p.stalled_progress_distance else 0
+                progress = self._progress(inp)
+                self.stalled = self.stalled + 1 if progress < p.stalled_progress_distance else 0
                 if self.stalled >= p.stalled_contacts:        # no avanza: es una esquina aunque el chasis no toque al frente
                     self.contact_kind = 'front'
                     self.stalled = 0
             else:
                 self.stalled = 0
             self.travel = 0.0
+            self.contact_pose = inp.pose
             if inp.back_bumper:
                 self._set(CONTACT_FWD, now)
                 return p.contact_forward_speed, 0.0
@@ -288,6 +296,17 @@ class PerimeterCore:
         return p.linear, self.sign * p.seek_turn       # curva suave hacia la pared hasta tocarla
 
     # ── Internos ─────────────────────────────────────────────
+
+    def _progress(self, inp: PerimeterInputs) -> float:
+        """Avance desde el contacto lateral anterior: con la pose real, la distancia entre las dos posiciones (un robot
+        que empuja sin moverse da 0 aunque se le ordene v > 0); sin pose en alguno de los dos, la integracion de v*dt."""
+        if inp.pose is not None and self.contact_pose is not None:
+            self.progress_source = 'pose'
+            self.last_progress = math.dist(inp.pose, self.contact_pose)
+        else:
+            self.progress_source = 'integrated'
+            self.last_progress = self.travel
+        return self.last_progress
 
     def _stuck(self, now: float):
         """Trabado: intenta liberarse retrocediendo en arco; si ya lo intento varias veces, se rinde."""

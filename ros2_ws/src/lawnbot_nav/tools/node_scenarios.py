@@ -489,7 +489,7 @@ def run_random_and_perimeter():
 
     robot_node = make(FakeRobot, **dict(room, x=3.0, y=2.0))      # lejos de la franja del borde
     rw = make(RandomWalk, **dict(rw_cfg, seed=5, edge_distance=1.0))
-    pm = make(Perimeter, **pm_cfg)
+    pm = make(Perimeter, **dict(pm_cfg, frame_id='map'))        # fake_robot publica map -> base_footprint (sim_room.yaml)
     gate = make(SafetyGate, **gate_cfg)
     nodes = (rw, pm)
     fake_tick, sensors_tick = robot_node.timer(0.02), robot_node.timer(0.2)
@@ -610,6 +610,8 @@ def run_random_and_perimeter():
     check(st['bumper_presses'] - start_bumpers >= 3, f'modo base por bumper: {st["bumper_presses"] - start_bumpers} contactos con la pared')
     check(pm.pubs['cmd_vel_perimeter'].last is not None and max(abs(m.linear.x) for m in pm.pubs['cmd_vel_perimeter'].sent) <= 0.15 + 1e-9,
           'velocidad lineal de perimeter <= 0,15 m/s')
+    check(pm.core.progress_source == 'pose' and not pm.get_logger().has('sin TF'),
+          'perimeter mide el avance entre contactos con la TF map -> base_footprint (sin aviso de respaldo)')
 
     set_mode('stop')
     run(1.0)
@@ -1626,6 +1628,32 @@ def run_sonar_filter():
     check(abs(left.last.range - 0.5) < 1e-9 and len(n.pubs['sonar_filtered/right'].sent) == 0, 'cada sonar tiene su propio filtro')
 
 
+def run_perimeter_pose():
+    print('\n[18] perimeter: pose real (TF) para el avance entre contactos, y respaldo v*dt con aviso unico')
+    import yaml
+    from lawnbot_nav.perimeter import Perimeter
+    cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'perimeter.yaml')))['perimeter']['ros__parameters']
+    check(cfg['frame_id'] == 'odom' and cfg['base_frame'] == 'base_footprint', 'perimeter.yaml: TF odom -> base_footprint por defecto')
+    R.drop_pose('odom', 'base_footprint')
+    n = make(Perimeter, **cfg)
+    now = R.MONO['t']
+    for t in ('sonar/center',):
+        n.cache.set(t, 1.5, now)
+    for b in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B5_back'):
+        n.cache.set(b, 0.0, now)
+    inp = n.build_inputs(now)
+    check(inp.pose is None, 'sin TF: pose None (el nucleo usa v*dt)')
+    n.build_inputs(now)
+    n.build_inputs(now)
+    warns = [s for lv, s in n.get_logger().lines if lv == 'WARN' and 'sin TF odom -> base_footprint' in s]
+    check(len(warns) == 1, 'sin TF: avisa una sola vez en el log')
+    R.set_pose('odom', 'base_footprint', 1.5, -0.5, 0.3)
+    check(n.build_inputs(now).pose == (1.5, -0.5), 'con TF: pasa la pose (x, y) al nucleo')
+    R.set_pose('odom', 'base_footprint', 1.5, -0.5, 0.3, stamp_ns=R.CLOCK['ns'] - 2 * 10**9)
+    check(n.build_inputs(now).pose is None, 'TF mas vieja que pose_timeout: se ignora')
+    R.drop_pose('odom', 'base_footprint')
+
+
 def run_sonar_prefix():
     print('\n[16] consumidores de sonares: leen sonar_filtered/* con sonar_topic_prefix (y sonar/* por defecto)')
     import yaml
@@ -1787,4 +1815,5 @@ if __name__ == '__main__':
     run_sonar_filter()
     run_sonar_prefix()
     run_gate_hysteresis()
+    run_perimeter_pose()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

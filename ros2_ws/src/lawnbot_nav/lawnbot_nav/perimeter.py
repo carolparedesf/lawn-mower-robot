@@ -15,12 +15,14 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
+from tf2_ros import Buffer, TransformListener
 
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.perimeter_logic import (PerimeterCore, PerimeterInputs,
                                          PerimeterParams)
 from lawnbot_nav.sensor_cache import (BUMPER_BACK, BUMPER_FRONT, SONARS,
                                       SensorCache)
+from lawnbot_nav.tf_utils import lookup_pose
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -42,6 +44,10 @@ class Perimeter(Node):
         d('sensor_timeout', 1.0)
         d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('output_topic', 'cmd_vel_perimeter')
+        # Pose real para medir el avance entre contactos: odom (robot real) o map (fake_robot con frame_id: map)
+        d('frame_id', 'odom')
+        d('base_frame', 'base_footprint')
+        d('pose_timeout', 0.5)
         defaults = PerimeterParams()
         for field in PARAM_FIELDS:
             d(field, getattr(defaults, field))
@@ -56,6 +62,12 @@ class Perimeter(Node):
                 f'use_side_sonar con side_sonar_angle_deg={params.side_sonar_angle_deg} (minimo 20): '
                 'se ignora el sonar lateral y se sigue por bumper')
         self.sensor_timeout = gp('sensor_timeout').value
+        self.frame_id = gp('frame_id').value
+        self.base_frame = gp('base_frame').value
+        self.pose_timeout = gp('pose_timeout').value
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_warned = False
         self.side_sonar = f'sonar/{params.side}'
         self.side_bumper = 'bumper/B3_left' if params.side == 'left' else 'bumper/B4_right'
 
@@ -99,6 +111,12 @@ class Perimeter(Node):
         use_sonar = self.core.sonar_enabled
         needed = (['sonar/center'] if self.core.p.use_center_sonar else []) + \
                  ([self.side_sonar] if use_sonar else [])
+        pose = lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame, self.pose_timeout)
+        if pose is None and not self.tf_warned:
+            self.tf_warned = True
+            self.get_logger().warn(
+                f'sin TF {self.frame_id} -> {self.base_frame}: el avance entre contactos se mide integrando la velocidad '
+                'ordenada v*dt (un robot trabado que recibe v > 0 parece avanzar)')
         sonar_ok = all(self.cache.get(n, now, t) is not None for n in needed)
         return PerimeterInputs(
             sensors_ok=sonar_ok and self.cache.fresh(BUMPER_FRONT, now, t),
@@ -106,13 +124,15 @@ class Perimeter(Node):
             center_range=self.cache.get('sonar/center', now, t),
             side_bumper=self.cache.pressed(self.side_bumper, now, t),
             front_bumper=self.cache.pressed(BUMPER_FRONT, now, t),
-            back_bumper=self.cache.pressed(BUMPER_BACK, now, t))
+            back_bumper=self.cache.pressed(BUMPER_BACK, now, t),
+            pose=None if pose is None else (pose.x, pose.y))
 
     def tick(self):
         now = time.monotonic()
         active = self.mode_active(now)
         if active and not self.was_active:
             self.core.reset(now)
+            self.tf_warned = False
             self.get_logger().info('activado')
         if not active and self.was_active:
             self.zeros_pending = 3

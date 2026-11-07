@@ -384,10 +384,14 @@ Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumpe
 - **Contacto lateral girando en la esquina:** si en `CORNER` se presiona el bumper lateral, retrocede `corner_back_distance` (0,12 m) antes de seguir girando. Si tras ese
   retroceso sigue tocando (con el rumbo hacia la esquina, retroceder arrastra la cola contra la pared), o si lo que toca es el bumper trasero, **avanza** `contact_forward_time_s`
   a `contact_forward_speed` y vuelve a `CORNER`. El tiempo total en una esquina sigue acotado por `corner_timeout_s` (8 s) → `UNSTICK` → `perimeter_blocked`.
-- **Esquina por falta de progreso:** `stalled_contacts` (3) contactos laterales seguidos con menos de `stalled_progress_distance` (0,15 m) de **avance neto ordenado** entre uno y otro
-  (lo avanzado menos lo retrocedido, integrando `v·dt`; no usa odometría) se tratan como contacto frontal: retroceso y giro de `front_contact_turn_angle_deg` (45°). Así la esquina se
-  detecta aunque el chasis no presione ningún bumper frontal. `stalled_contacts: 0` lo apaga. Ejemplo típico: en una esquina sin bumper frontal el ciclo toque–retroceso 0,10 m–giro 15°
-  avanzaba ~2–3 cm por ciclo.
+- **Esquina por falta de progreso:** `stalled_contacts` (3) contactos laterales seguidos con menos de `stalled_progress_distance` (0,15 m) de avance entre uno y otro se tratan como
+  contacto frontal: retroceso y giro de `front_contact_turn_angle_deg` (45°). Así la esquina se detecta aunque el chasis no presione ningún bumper frontal. `stalled_contacts: 0` lo apaga.
+  El avance se mide con la **pose real**: distancia entre las posiciones del robot en dos contactos laterales consecutivos, con la TF `frame_id → base_frame` (`perimeter.yaml`:
+  `odom → base_footprint` en el robot; con `fake_robot` y `sim_room.yaml`, que publica `map → base_footprint`, hay que arrancar `perimeter` con `frame_id: map`). Un robot que empuja
+  contra la pared sin moverse, que el `safety_gate` frena o que patina da ~0 m aunque se le ordene `v > 0`. **Respaldo:** si la TF falta (o es más vieja que `pose_timeout`, 0,5 s) usa
+  el avance neto ordenado (avance menos retroceso, integrando `v·dt`), que **no detecta** un robot trabado; el log avisa una vez por activación (`sin TF odom -> base_footprint: ...`).
+  El primer contacto tras activar no tiene contacto previo con que comparar y también usa el respaldo. Ejemplo típico del ciclo toque–retroceso 0,10 m–giro 15° en una esquina sin
+  bumper frontal: avanza ~2–3 cm por ciclo.
 - **Borde perdido** (sin contacto por `bump_lost_timeout_s`, 10 s): búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s);
   si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
 - **Todos los parámetros de contacto están en el YAML** para ajustarlos en el robot (ángulos, distancias, velocidades y tiempos).
