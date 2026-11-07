@@ -44,6 +44,10 @@ class FakeRobot(Node):
         # obstacles = [x, y, radio, ...]. Valores en cero se ignoran.
         d('walls', [0.0, 0.0, 0.0, 0.0])
         d('obstacles', [0.0, 0.0, 0.0])
+        # Esquinas redondeadas del cuerpo y como se reparten los bumpers (ver sim_world.bumper_zones). Radio 0 = rectangulo
+        d('corner_radius', 0.0)              # [m]
+        d('corner_split_deg', 45.0)          # [grados] desde la cara frontal/trasera: hasta aqui el bumper frontal/trasero, luego el lateral
+        d('corner_dead_deg', 0.0)            # [grados] zona sin bumper centrada en el split
         d('publish_sensors', False)
         d('sensor_rate_hz', 5.0)             # como el firmware
         d('side_sonar_yaw_deg', 0.0)         # angulo de los sonares laterales (el URDF los pone en 0)
@@ -66,7 +70,9 @@ class FakeRobot(Node):
         walls = [((w[i], w[i + 1]), (w[i + 2], w[i + 3])) for i in range(0, len(w) - 3, 4)
                  if (w[i], w[i + 1]) != (w[i + 2], w[i + 3])]
         circles = [(o[i], o[i + 1], o[i + 2]) for i in range(0, len(o) - 2, 3)]
-        self.world = SimWorld(walls, circles) if (walls or circles) else None
+        self.world = (SimWorld(walls, circles, corner_radius=gp('corner_radius').value,
+                               corner_split_deg=gp('corner_split_deg').value,
+                               corner_dead_deg=gp('corner_dead_deg').value) if (walls or circles) else None)
         yaw = gp('side_sonar_yaw_deg').value
         self.sonar_yaw = {'left': yaw, 'center': 0.0, 'right': -yaw}
 

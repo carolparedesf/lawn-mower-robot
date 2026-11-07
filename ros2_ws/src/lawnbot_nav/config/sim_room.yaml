@@ -10,6 +10,13 @@ fake_robot:
     x: 2.0
     y: 1.0
     yaw: 0.0
+    # Esquinas del cuerpo redondeadas (a medir en el robot real; los valores son provisorios). Cada arco se reparte
+    # entre el bumper frontal/trasero (B1/B2/B5) y el lateral (B3/B4) segun el angulo del punto de contacto, medido
+    # desde la cara frontal/trasera: hasta corner_split_deg - corner_dead_deg/2 el frontal/trasero, desde
+    # corner_split_deg + corner_dead_deg/2 el lateral, y en medio (zona muerta) ninguno. corner_radius 0 = cuerpo rectangular.
+    corner_radius: 0.05
+    corner_split_deg: 45.0
+    corner_dead_deg: 0.0
     walls: [0.0, 0.0, 10.0, 0.0,
             10.0, 0.0, 10.0, 8.0,
             10.0, 8.0, 0.0, 8.0,

@@ -53,8 +53,8 @@ Alertas (`/nav/safety_alert` → campo `alert` de `robot/status`): `none`, `sens
 `bumper_front`, `bumper_back`, `obstacle_stop`, `obstacle_near`.
 
 `bumper_front` sale solo de `bumper_front_topics` (B1, B2) y `bumper_back` solo de `bumper_back_topics` (B5). Los laterales (B3, B4,
-`bumper_monitor_topics`) son de monitoreo: no generan ninguna alerta. En el simulador (`sim_world`), las esquinas del cuerpo pertenecen
-a los bumpers laterales, para que una pared pegada a un costado no presione también B2 o B5.
+`bumper_monitor_topics`) son de monitoreo: no generan ninguna alerta. En el simulador (`sim_world`) ver *Esquinas redondeadas y bumpers
+en el simulador* más abajo.
 
 ## Instalación (en la Pi)
 
@@ -402,8 +402,8 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
 
 - **Probado con dos formas de bumpers en el simulador:** `test_perimeter.py` da la vuelta completa (pared a derecha e izquierda y el cuarto de `sim_room.yaml`) con las zonas de bumper actuales
   de `sim_world.py` y con las anteriores (esquinas compartidas, que hacían que un contacto lateral en la esquina presionara también B2/B5). Sin `perimeter_blocked` en ninguna. Con las zonas
-  actuales la vuelta tarda más (~790 s contra ~480 s en `sim_room`) porque la esquina se resuelve por falta de progreso en vez de por el bumper frontal. **Pendiente:** la disposición real de
-  los bumpers en el chasis (el simulador todavía no la refleja).
+  actuales la vuelta tarda más (~790 s contra ~480 s en `sim_room`) porque la esquina se resuelve por falta de progreso en vez de por el bumper frontal. Con `corner_radius` > 0 (ver abajo) la vuelta también se completa; la disposición real de
+  los bumpers en el chasis hay que medirla en el robot.
 - **Limitación (simulación):** con el cuerpo rígido, en una esquina interior pegado a la pared el robot no puede girar sin que la cola roce; el retroceso en arco
   (`unstick_*`) lo resuelve en el cuarto simulado, pero con paredes reales conviene ajustar `contact_*` y `unstick_*` en el robot.
 - **IMPORTANTE (a medir):** en el URDF los tres sonares miran al frente (`rpy 0`); el ángulo real de montaje del sonar lateral hace falta solo para el refinamiento.
@@ -412,6 +412,17 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
 
 1. Sin ROS: `PYTHONPATH=. python3 test/test_sim_world.py`, `test_random_walk.py`, `test_perimeter.py` y `test_gate_sonars.py` (uno por vez). `sim_world.py` es un cuarto simulado
    con paredes y obstáculos circulares, sonares (cono de ±7,5°), bumpers por zona del cuerpo y colisiones.
+
+   **Esquinas redondeadas y bumpers en el simulador** (`fake_robot`, `config/sim_room.yaml`; valores **provisorios**, a ajustar cuando se mida el chasis):
+   | Parámetro | Defecto en el código | En `sim_room.yaml` | Significado |
+   |---|---|---|---|
+   | `corner_radius` | 0,0 m | 0,05 m | radio de las cuatro esquinas del cuerpo (también en la colisión). **0 = rectángulo**, con las esquinas del lado de los bumpers laterales |
+   | `corner_split_deg` | 45° | 45° | ángulo del punto de contacto en el arco, medido desde la cara frontal/trasera (0°) hacia la lateral (90°): antes del split lo cubre B1/B2/B5, desde el split B3/B4 |
+   | `corner_dead_deg` | 0° | 0° | zona **sin bumper** centrada en el split (con 20° y split 45°: de 35° a 55° no hay bumper). Con 0 el punto exacto del split es del lateral |
+
+   Un bumper se presiona con un punto de su zona a ≤ 2 cm de una pared, así que una pared pegada a un costado también toca la parte del arco más cercana a ella: con radio 0,15 m
+   y split 45° solo el lateral; si el split es 80° se presiona además B2 o B5. `perimeter` da la vuelta completa de `sim_room` con radio 0,05 y 0,10 m y zona muerta de 0° y 20°
+   (`test_perimeter.py`, con la pose real para el avance entre contactos).
 2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [6]: `fake_robot` en un cuarto, los nodos y el `safety_gate` encadenados; [7]: umbrales por sonar e ignorar los laterales).
 3. Con ROS y `fake_robot` en un cuarto con paredes y obstáculos:
    ```bash

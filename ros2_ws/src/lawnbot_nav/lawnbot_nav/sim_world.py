@@ -80,20 +80,89 @@ def _segment_hits_rect(p0, p1, xmin, xmax, ymin, ymax) -> bool:
     return True
 
 
+def _segment_rect_distance(p0, p1, xmin, xmax, ymin, ymax) -> float:
+    """Distancia minima entre el segmento p0-p1 y el rectangulo (0 si se tocan)."""
+    if _segment_hits_rect(p0, p1, xmin, xmax, ymin, ymax):
+        return 0.0
+    best = math.inf
+    for p in (p0, p1):
+        nearest = (min(max(p[0], xmin), xmax), min(max(p[1], ymin), ymax))
+        best = min(best, math.dist(p, nearest))
+    for corner in ((xmin, ymin), (xmin, ymax), (xmax, ymin), (xmax, ymax)):
+        best = min(best, _dist_point_segment(corner, p0, p1))
+    return best
+
+
+def bumper_zones(corner_radius: float = 0.0, split_deg: float = 45.0, dead_deg: float = 0.0):
+    """Puntos del contorno del cuerpo que cubre cada bumper.
+
+    Con `corner_radius` 0 el cuerpo es un rectangulo y las esquinas son de los bumpers laterales (ver _edge_samples).
+    Con radio > 0 las cuatro esquinas son arcos de ese radio. En cada arco el angulo se mide desde la cara
+    frontal/trasera (0 grados) hacia la lateral (90 grados): hasta `split_deg` - `dead_deg`/2 lo cubre el bumper
+    frontal/trasero, desde `split_deg` + `dead_deg`/2 el lateral, y en medio (zona muerta, centrada en el split)
+    ningun bumper. Con `dead_deg` 0 el punto exacto del split es del lateral.
+    """
+    r = float(corner_radius)
+    if r <= 0.0:
+        return _edge_samples()
+    x0, x1 = BODY_X
+    y0, y1 = BODY_Y
+    r = min(r, (x1 - x0) / 2.0, (y1 - y0) / 2.0)
+    step = 0.03
+
+    def span(a, b):
+        n = max(1, int(round(abs(b - a) / step)))
+        return [a + (b - a) * i / n for i in range(n + 1)]
+
+    lo, hi = split_deg - dead_deg / 2.0, split_deg + dead_deg / 2.0
+    zones = {name: [] for name in BUMPER_MOUNTS}
+
+    def arc(cx, cy, sx, sy, face, side):
+        """Arco de centro (cx, cy) en el cuadrante (sx, sy); `face` = bumper frontal/trasero, `side` = lateral."""
+        n = max(6, int(math.ceil(r * math.pi / 2.0 / 0.01)))
+        for i in range(n + 1):
+            alpha = 90.0 * i / n                       # 0: cara frontal/trasera, 90: cara lateral
+            a = math.radians(alpha)
+            pt = (cx + sx * r * math.cos(a), cy + sy * r * math.sin(a))
+            if dead_deg <= 0.0:
+                owner = face if alpha < split_deg else side
+            else:
+                owner = face if alpha <= lo else side if alpha >= hi else None
+            if owner:
+                zones[owner].append(pt)
+
+    zones['bumper/B1_front_left'] += [(x1, y) for y in span(0.0, y1 - r)]
+    zones['bumper/B2_front_right'] += [(x1, y) for y in span(y0 + r, 0.0)]
+    zones['bumper/B3_left'] += [(x, y1) for x in span(x0 + r, x1 - r)]
+    zones['bumper/B4_right'] += [(x, y0) for x in span(x0 + r, x1 - r)]
+    zones['bumper/B5_back'] += [(x0, y) for y in span(y0 + r, y1 - r)]
+    arc(x1 - r, y1 - r, 1, 1, 'bumper/B1_front_left', 'bumper/B3_left')
+    arc(x1 - r, y0 + r, 1, -1, 'bumper/B2_front_right', 'bumper/B4_right')
+    arc(x0 + r, y1 - r, -1, 1, 'bumper/B5_back', 'bumper/B3_left')
+    arc(x0 + r, y0 + r, -1, -1, 'bumper/B5_back', 'bumper/B4_right')
+    return zones
+
+
 _BUMPER_ZONES = _edge_samples()
 
 
 class SimWorld:
     def __init__(self, walls: Sequence[Tuple[Point, Point]] = (),
-                 circles: Sequence[Tuple[float, float, float]] = ()):
+                 circles: Sequence[Tuple[float, float, float]] = (),
+                 corner_radius: float = 0.0, corner_split_deg: float = 45.0, corner_dead_deg: float = 0.0):
+        """`corner_radius` (m) redondea las esquinas del cuerpo (0 = rectangulo). El arco se reparte entre el bumper
+        frontal/trasero y el lateral en `corner_split_deg` (medido desde la cara frontal/trasera) y, si
+        `corner_dead_deg` > 0, queda una zona sin bumper de ese ancho centrada en el split. Ver bumper_zones()."""
         self.walls = [(tuple(a), tuple(b)) for a, b in walls]
         self.circles = [tuple(c) for c in circles if c[2] > 0.0]
+        self.corner_radius = max(0.0, float(corner_radius))
+        self.zones = bumper_zones(self.corner_radius, corner_split_deg, corner_dead_deg)
 
     @staticmethod
-    def room(width: float, height: float, x0: float = 0.0, y0: float = 0.0, walls_only=True):
+    def room(width: float, height: float, x0: float = 0.0, y0: float = 0.0, walls_only=True, **kw):
         a, b = (x0, y0), (x0 + width, y0)
         c, d = (x0 + width, y0 + height), (x0, y0 + height)
-        return SimWorld(walls=[(a, b), (b, c), (c, d), (d, a)])
+        return SimWorld(walls=[(a, b), (b, c), (c, d), (d, a)], **kw)
 
     @staticmethod
     def box(x1: float, y1: float, x2: float, y2: float):
@@ -150,7 +219,7 @@ class SimWorld:
     def bumpers(self, pose) -> Dict[str, bool]:
         """Cada bumper cubre una zona del borde del cuerpo (no un solo punto)."""
         out = {}
-        for name, zone in _BUMPER_ZONES.items():
+        for name, zone in self.zones.items():
             out[name] = any(self.distance(_to_world(pose, *pt)) <= BUMPER_CONTACT for pt in zone)
         return out
 
@@ -164,15 +233,16 @@ class SimWorld:
             dx, dy = p[0] - pose[0], p[1] - pose[1]
             return c * dx + s * dy, -s * dx + c * dy
 
-        x0, x1 = BODY_X
-        y0, y1 = BODY_Y
+        r = min(self.corner_radius, (BODY_X[1] - BODY_X[0]) / 2.0, (BODY_Y[1] - BODY_Y[0]) / 2.0)
+        x0, x1 = BODY_X[0] + r, BODY_X[1] - r              # rectangulo interior; el cuerpo es ese rectangulo + r
+        y0, y1 = BODY_Y[0] + r, BODY_Y[1] - r
         for a, b in self.walls:
-            if _segment_hits_rect(body(a), body(b), x0, x1, y0, y1):
+            if _segment_rect_distance(body(a), body(b), x0, x1, y0, y1) <= r:
                 return True
-        for cx, cy, r in self.circles:
+        for cx, cy, rad in self.circles:
             bx, by = body((cx, cy))
             nearest = (min(max(bx, x0), x1), min(max(by, y0), y1))
-            if math.dist((bx, by), nearest) <= r:
+            if math.dist((bx, by), nearest) <= rad + r:
                 return True
         return False
 
