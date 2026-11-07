@@ -3,7 +3,7 @@
 
 Lee ~/.ros/lawnbot_geofence.json (lat/lon), pone el centro del cerco en el centro del mundo elegido
 (config/sim_room.yaml o sim_field.yaml, segun --world), comprueba que el arranque del robot quede dentro del cerco
-con un margen minimo y que el cerco entre en el mundo, e imprime los comandos de sim_world y nav.launch.py.
+con un margen minimo y que el cerco entre en el mundo, e imprime los comandos de sim_world, nav.launch.py y el bridge con la posicion simulada.
 Sin ROS: solo usa la logica de lawnbot_nav.geofence_logic.
 
   python3 tools/datum_from_fence.py --world field
@@ -94,7 +94,8 @@ def compute(points, world, margin=DEFAULT_MARGIN, config_dir=None):
 def commands(result):
     return [f"ros2 launch lawnbot_nav sim_world.launch.py world:={result['world']}",
             'ros2 launch lawnbot_nav nav.launch.py geofence_conversion_mode:=datum '
-            f"datum_lat:={result['datum_lat']:.9f} datum_lng:={result['datum_lng']:.9f}"]
+            f"datum_lat:={result['datum_lat']:.9f} datum_lng:={result['datum_lng']:.9f}",
+            f"python3 bridge/bridge.py --sim-position --datum-lat {result['datum_lat']:.9f} --datum-lng {result['datum_lng']:.9f}"]
 
 
 def main(argv=None):

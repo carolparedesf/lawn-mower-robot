@@ -453,6 +453,20 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    robot quede dentro del cerco con al menos `--margin` (0,4 m) hasta el borde. Si algo falla imprime el motivo, **no** imprime comandos y sale con código 2 (1 si no puede leer el cerco).
    Con `room` el cerco tiene que caber en 10 × 8 m y contener el arranque (2, 1) con margen. No hace falta ROS. Si `nav.launch.py` ya estaba corriendo con otro datum, reiniciarlo: `geofence_node` no aplica el datum en caliente.
 
+   **Posición del robot en la app (simulación).** `robot/position` sale de gpsd y en simulación no hay GPS, así que el robot no aparece en el mapa de la app. El bridge tiene una opción, **apagada por defecto**,
+   que toma la pose de la TF `map → base_footprint`, la convierte a lat/lng con el **mismo datum** que `geofence_node` (modo `datum`, misma `meters_per_degree`, así el robot cae dentro del cerco dibujado) y publica
+   `robot/position` a 1 Hz con el JSON de siempre `{"lat", "lng", "hdg"}`. El rumbo `hdg` es como el de gpsd (grados desde el norte, sentido horario; yaw 0 = este = 90°). Con la opción activa **no se conecta a gpsd**
+   (ni hace falta tenerlo instalado); si no hay TF o es vieja (> 2 s) no publica nada. Sin la opción el bridge es el de siempre y no necesita `sim_position.py` ni `lawnbot_nav`.
+   ```bash
+   # datum_lat/datum_lng salen de tools/datum_from_fence.py (que imprime este comando ya armado)
+   python3 bridge/bridge.py --sim-position --datum-lat -25.300010407 --datum-lng -57.599998952
+   # o por variables de entorno
+   LAWNBOT_SIM_POSITION=1 LAWNBOT_DATUM_LAT=-25.300010407 LAWNBOT_DATUM_LNG=-57.599998952 python3 bridge/bridge.py
+   ```
+   Orden de arranque: `sim_world.launch.py world:=field`, `nav.launch.py geofence_conversion_mode:=datum datum_lat:=… datum_lng:=…` y el bridge con **el mismo datum** (con otro, el robot se ve desplazado respecto del cerco).
+   En el portátil hace falta `source` de `lawnbot_nav` (el bridge importa su `geofence_logic` y `tf_utils`) y `bridge.py` junto a `sim_position.py`. No activar la opción en `bridge.service` del robot real.
+   Falla al arrancar con un mensaje claro si falta el datum o es inválido (0, 0). Pruebas: `python3 bridge/test_sim_position.py` y el escenario [22] de `tools/node_scenarios.py`.
+
    **Ver la simulación en RViz** (solo simulación: lo publica `fake_robot`, nada del robot real; en `sim_room.yaml` va `publish_markers: true` y por defecto está apagado):
    ```bash
    ros2 launch lawnbot_nav sim_world.launch.py        # fake_robot (y, aparte, nav.launch.py)
