@@ -5,6 +5,8 @@ fake_robot:
     frame_id: map
     cmd_topic: cmd_vel             # pasa por twist_mux y safety_gate (nav.launch.py)
     publish_sensors: true
+    # Para RViz (config/sim.rviz): /sim/markers y /sim/path. Solo simulacion
+    publish_markers: true
     sensor_rate_hz: 5.0
     side_sonar_yaw_deg: 45.0       # sonares laterales a +-45 grados (el URDF los pone al frente)
     x: 2.0

@@ -423,6 +423,23 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    Un bumper se presiona con un punto de su zona a ≤ 2 cm de una pared, así que una pared pegada a un costado también toca la parte del arco más cercana a ella: con radio 0,15 m
    y split 45° solo el lateral; si el split es 80° se presiona además B2 o B5. `perimeter` da la vuelta completa de `sim_room` con radio 0,05 y 0,10 m y zona muerta de 0° y 20°
    (`test_perimeter.py`, con la pose real para el avance entre contactos).
+
+   **Ver la simulación en RViz** (solo simulación: lo publica `fake_robot`, nada del robot real; en `sim_room.yaml` va `publish_markers: true` y por defecto está apagado):
+   ```bash
+   ros2 launch lawnbot_nav sim_world.launch.py        # fake_robot (y, aparte, nav.launch.py)
+   rviz2 -d $(ros2 pkg prefix lawnbot_nav)/share/lawnbot_nav/config/sim.rviz     # o: rviz2 -d ros2_ws/src/lawnbot_nav/config/sim.rviz
+   ```
+   `sim.rviz` abre con *Fixed Frame* `map` (el `frame_id` de `fake_robot` en `sim_room.yaml`) y estos displays:
+   | Topic | Tipo | Qué muestra |
+   |---|---|---|
+   | TF | — | `map → base_footprint` |
+   | `/sim/markers` | `MarkerArray`, ~1 Hz, `transient_local` | paredes y obstáculos de `sim_room.yaml`; la huella del robot con las esquinas redondeadas (`corner_radius`, en `base_footprint`, así sigue al robot); cada bumper como un segmento, **verde libre y rojo presionado** (al cambiar un bumper se republica enseguida, sin esperar el segundo) |
+   | `/sim/path` | `nav_msgs/Path`, ~1 Hz, `transient_local` | rastro del robot: las últimas `path_max_poses` (2000) poses, una cada `path_min_step` (2 cm) o `path_min_yaw` (0,087 rad) |
+   | `/geofence/polygon`, `/coverage/markers` | `PolygonStamped`, `MarkerArray` | el cerco y la ruta de cobertura (`nav.launch.py` + `coverage_parallel`) |
+
+   Parámetros de `fake_robot`: `publish_markers`, `markers_rate_hz` (1,0), `path_max_poses`, `path_min_step`, `path_min_yaw`. Los segmentos de bumper salen de las mismas zonas
+   que usa la simulación (`corner_split_deg`, `corner_dead_deg`), así que la zona muerta se ve como un hueco entre dos segmentos. La huella y los bumpers se dibujan en `base_footprint`:
+   hace falta la TF. **No** correr `fake_robot` junto con la odometría real (ver arriba).
 2. Nodos sin ROS: `python3 tools/node_scenarios.py` (escenario [6]: `fake_robot` en un cuarto, los nodos y el `safety_gate` encadenados; [7]: umbrales por sonar e ignorar los laterales).
 3. Con ROS y `fake_robot` en un cuarto con paredes y obstáculos:
    ```bash

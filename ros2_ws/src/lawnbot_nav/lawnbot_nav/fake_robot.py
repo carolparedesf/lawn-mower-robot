@@ -4,6 +4,10 @@
 Opcionalmente (walls / obstacles / publish_sensors) vive en un mundo con paredes y obstaculos
 circulares y publica los sonares y bumpers como el firmware, con colisiones.
 
+Con `publish_markers` (solo simulacion; apagado por defecto, lo enciende config/sim_room.yaml) publica para RViz
+/sim/markers (paredes, obstaculos, huella con esquinas redondeadas y cada bumper, rojo al presionarse) y
+/sim/path (rastro). Ver config/sim.rviz.
+
 NO ejecutar junto con ekf_local ni con la odometria real: habria dos fuentes del TF
 frame_id -> child_frame (odom -> base_footprint).
 """
@@ -11,15 +15,22 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Twist, TransformStamped
+from geometry_msgs.msg import Point, PoseStamped, Twist, TransformStamped
+from nav_msgs.msg import Path
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
+from visualization_msgs.msg import Marker, MarkerArray
 
 from lawnbot_nav.sim_robot import SimRobot
+from lawnbot_nav.sim_view import Trail, bumper_polylines, footprint
 from lawnbot_nav.sim_world import (BUMPER_MOUNTS, SONAR_MAX_RANGE, SONAR_MIN_RANGE, SONAR_FOV,
                                    SimWorld)
+
+LATCHED = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                     durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 SONAR_FRAMES = {'left': 'SonarL_Link', 'center': 'SonarC_Link', 'right': 'SonarR_Link'}
 
@@ -49,6 +60,12 @@ class FakeRobot(Node):
         d('corner_split_deg', 45.0)          # [grados] desde la cara frontal/trasera: hasta aqui el bumper frontal/trasero, luego el lateral
         d('corner_dead_deg', 0.0)            # [grados] zona sin bumper centrada en el split
         d('publish_sensors', False)
+        # Visualizacion en RViz (solo simulacion): /sim/markers (MarkerArray) y /sim/path (Path), en `frame_id`
+        d('publish_markers', False)
+        d('markers_rate_hz', 1.0)
+        d('path_max_poses', 2000)
+        d('path_min_step', 0.02)             # [m] distancia minima entre poses del rastro
+        d('path_min_yaw', 0.087)             # [rad] o giro minimo
         d('sensor_rate_hz', 5.0)             # como el firmware
         d('side_sonar_yaw_deg', 0.0)         # angulo de los sonares laterales (el URDF los pone en 0)
 
@@ -77,6 +94,9 @@ class FakeRobot(Node):
         self.sonar_yaw = {'left': yaw, 'center': 0.0, 'right': -yaw}
 
         self.broadcaster = TransformBroadcaster(self)
+        self.view = None
+        if gp('publish_markers').value:
+            self.setup_view(gp)
         if gp('publish_sensors').value:
             self.sonar_pubs = {s: self.create_publisher(Range, f'sonar/{s}', 10) for s in SONAR_FRAMES}
             self.bumper_pubs = {n: self.create_publisher(Bool, n, 10) for n in BUMPER_MOUNTS}
@@ -85,6 +105,77 @@ class FakeRobot(Node):
         self.create_timer(self.dt, self.tick)
         self.get_logger().info(
             f"fake_robot: {self.frame_id} -> {self.child_frame}, orden en '{gp('cmd_topic').value}'")
+
+    # ── Vista en RViz ────────────────────────────────────────
+
+    def setup_view(self, gp):
+        self.markers_pub = self.create_publisher(MarkerArray, 'sim/markers', LATCHED)
+        self.path_pub = self.create_publisher(Path, 'sim/path', LATCHED)
+        self.trail = Trail(gp('path_max_poses').value, gp('path_min_step').value, gp('path_min_yaw').value)
+        radius = self.world.corner_radius if self.world is not None else 0.0
+        self.view = {'footprint': footprint(radius),
+                     'bumpers': bumper_polylines(self.world.zones) if self.world is not None else {}}
+        self.pressed = {}
+        self.create_timer(1.0 / gp('markers_rate_hz').value, self.publish_view)
+        self.get_logger().info('fake_robot: publica /sim/markers y /sim/path para RViz (solo simulacion)')
+
+    def _marker(self, ns, mid, mtype, frame, rgb, width):
+        m = Marker()
+        m.header.frame_id = frame                       # stamp 0: RViz usa la ultima TF disponible
+        m.ns, m.id, m.type, m.action = ns, mid, mtype, Marker.ADD
+        m.pose.orientation.w = 1.0
+        m.scale.x = width
+        m.color.r, m.color.g, m.color.b, m.color.a = rgb[0], rgb[1], rgb[2], 1.0
+        return m
+
+    def build_markers(self, pressed):
+        array = MarkerArray()
+        if self.world is not None:
+            walls = self._marker('walls', 0, Marker.LINE_LIST, self.frame_id, (0.85, 0.85, 0.85), 0.05)
+            for a, b in self.world.walls:
+                walls.points += [Point(x=float(a[0]), y=float(a[1]), z=0.0), Point(x=float(b[0]), y=float(b[1]), z=0.0)]
+            array.markers.append(walls)
+            for i, (cx, cy, r) in enumerate(self.world.circles):
+                m = self._marker('obstacles', i, Marker.CYLINDER, self.frame_id, (0.85, 0.55, 0.2), 2.0 * r)
+                m.scale.y, m.scale.z = 2.0 * r, 0.3
+                m.pose.position.x, m.pose.position.y, m.pose.position.z = float(cx), float(cy), 0.15
+                array.markers.append(m)
+        body = self._marker('footprint', 0, Marker.LINE_STRIP, self.child_frame, (1.0, 1.0, 1.0), 0.01)
+        body.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in self.view['footprint']]
+        array.markers.append(body)
+        for i, (name, pts) in enumerate(self.view['bumpers'].items()):
+            rgb = (1.0, 0.1, 0.1) if pressed.get(name) else (0.25, 0.7, 0.3)
+            m = self._marker('bumpers', i, Marker.LINE_STRIP, self.child_frame, rgb, 0.03)
+            m.points = [Point(x=float(x), y=float(y), z=0.01) for x, y in pts]
+            array.markers.append(m)
+        return array
+
+    def build_path(self):
+        msg = Path()
+        msg.header.frame_id = self.frame_id
+        for x, y, yaw in self.trail.poses:
+            p = PoseStamped()
+            p.header.frame_id = self.frame_id
+            p.pose.position.x, p.pose.position.y = float(x), float(y)
+            p.pose.orientation.z, p.pose.orientation.w = math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+            msg.poses.append(p)
+        return msg
+
+    def current_bumpers(self):
+        if self.world is None:
+            return {}
+        return self.world.bumpers((self.robot.x, self.robot.y, self.robot.yaw))
+
+    def publish_view(self):
+        self.pressed = self.current_bumpers()
+        self.markers_pub.publish(self.build_markers(self.pressed))
+        self.path_pub.publish(self.build_path())
+
+    def on_bumpers(self, pressed):
+        """Se llama con cada lectura de bumpers: si cambia alguno se republica enseguida (el timer es de ~1 Hz)."""
+        if self.view is not None and pressed != self.pressed:
+            self.pressed = dict(pressed)
+            self.markers_pub.publish(self.build_markers(self.pressed))
 
     def on_cmd(self, msg):
         self.v_cmd = msg.linear.x
@@ -108,6 +199,8 @@ class FakeRobot(Node):
         tf.transform.rotation.z = math.sin(self.robot.yaw / 2.0)
         tf.transform.rotation.w = math.cos(self.robot.yaw / 2.0)
         self.broadcaster.sendTransform(tf)
+        if self.view is not None:
+            self.trail.add(self.robot.x, self.robot.y, self.robot.yaw)
 
 
     def publish_sensors(self):
@@ -125,8 +218,10 @@ class FakeRobot(Node):
             msg.max_range = SONAR_MAX_RANGE
             msg.range = float(value)
             self.sonar_pubs[name].publish(msg)
-        for name, pressed in self.world.bumpers(pose).items():
+        bumpers = self.world.bumpers(pose)
+        for name, pressed in bumpers.items():
             self.bumper_pubs[name].publish(Bool(data=bool(pressed)))
+        self.on_bumpers(bumpers)
 
 
 def main(args=None):
