@@ -16,7 +16,7 @@ ALERT_OBSTACLE_NEAR = 'obstacle_near'
 # De mayor a menor prioridad. Las alertas de otros nodos llegan por /nav/alert_in ('fuente:alerta')
 ALERT_PRIORITY = (
     ALERT_SENSOR_TIMEOUT, ALERT_BUMPER_FRONT, ALERT_BUMPER_BACK, ALERT_OBSTACLE_STOP,
-    'estop', 'geofence_breach', 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
+    'estop', 'geofence_breach', 'outside_fence', 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
     'random_blocked', 'local_minimum', 'geofence_not_ready', 'coverage_error', 'no_pose',
     'auto_start_timeout', ALERT_OBSTACLE_NEAR,
 )

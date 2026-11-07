@@ -18,7 +18,15 @@ random_walk:
     edge_turn_spread_deg: 30.0
     edge_turn_min_deg: 120.0
     edge_turn_max_deg: 180.0
-    edge_hard_distance: 0.5        # m: por debajo el borde dispara siempre; entre este y edge_distance solo si se acerca
+    edge_margin: 0.5               # m: por debajo y avanzando hacia el borde: retroceso y giro al centroide antes de cruzarlo (si ya mira al interior no dispara)
+    edge_backup_stop_distance: 0.15  # m: el retroceso se corta si el borde esta a menos de esto y se sigue acercando
+    # Fuera del cerco (distancia negativa): gira en el lugar hacia el centroide y avanza despacio hasta entrar. A mas de
+    # max_outside_recovery del borde, sin centroide o pasado recover_timeout_s se queda quieto y avisa outside_fence
+    max_outside_recovery: 1.0
+    recover_speed: 0.1
+    recover_turn_tolerance_deg: 20.0
+    recover_clear_time_s: 1.5
+    recover_timeout_s: 60.0
     edge_trend_window_s: 1.0
     edge_trend_eps: 0.1
     frame_id: map

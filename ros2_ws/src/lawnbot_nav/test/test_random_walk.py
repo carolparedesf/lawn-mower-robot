@@ -2,7 +2,7 @@ import math
 import unittest
 
 from lawnbot_nav.geofence_logic import polygon_centroid, signed_distance
-from lawnbot_nav.random_walk_logic import (BACKUP, BLOCKED, FORWARD, TURN, RandomWalkCore,
+from lawnbot_nav.random_walk_logic import (BACKUP, BLOCKED, FORWARD, RECOVER, TURN, RandomWalkCore,
                                            RandomWalkInputs, RandomWalkParams)
 from lawnbot_nav.sim_robot import SimRobot
 from lawnbot_nav.sim_world import SimWorld
@@ -117,13 +117,13 @@ class WalkTests(unittest.TestCase):
         # arranca a 0.6 m del borde (franja de 1.5 m): no debe quedar retrocediendo para siempre
         fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
         world = SimWorld.room(10.0, 8.0)
-        params = RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.4)
+        params = RandomWalkParams(edge_distance=1.5, edge_margin=0.4)
         core, robot, log = simulate(world, params, seed=4, tmax=300.0, start=(1.1, 4.0, 0.0), fence=fence)
         self.assertGreater(log['edge_min'], 0.0)                        # nunca sale del cerco
         self.assertGreaterEqual(len(cells_visited(log['xy'])), 20)      # y recorre bastante
 
     def test_dentro_de_la_franja_avanzar_hacia_adentro_no_dispara(self):
-        core = RandomWalkCore(RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.5), seed=1)
+        core = RandomWalkCore(RandomWalkParams(edge_distance=1.5, edge_margin=0.5), seed=1)
         t, edge = 0.0, 0.8
         for _ in range(60):                                       # se aleja del borde: 0.8 -> 1.4 m
             core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=edge, geofence_ok=True), t)
@@ -131,7 +131,7 @@ class WalkTests(unittest.TestCase):
             t += 0.1
             edge += 0.01
         t, edge = 0.0, 1.4                                        # acercandose: 1.4 -> dispara antes de 0.5
-        core = RandomWalkCore(RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.5), seed=1)
+        core = RandomWalkCore(RandomWalkParams(edge_distance=1.5, edge_margin=0.5), seed=1)
         fired = None
         for _ in range(200):
             core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=edge, geofence_ok=True), t)
@@ -146,7 +146,7 @@ class WalkTests(unittest.TestCase):
     def test_giro_por_borde_apunta_al_interior_del_cerco(self):
         fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
         world = SimWorld.room(10.0, 8.0)
-        params = RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.5, edge_turn_spread_deg=30.0)
+        params = RandomWalkParams(edge_distance=1.5, edge_margin=0.5, edge_turn_spread_deg=30.0)
         errors = []
         for seed in range(1, 6):
             log = simulate(world, params, seed, tmax=500.0, start=(5.0, 4.0, 0.0), fence=fence,
@@ -162,7 +162,7 @@ class WalkTests(unittest.TestCase):
         # Mismo cerco, mismas semillas: girar hacia el interior evita volver a chocar con el borde
         fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
         world = SimWorld.room(10.0, 8.0)
-        params = RandomWalkParams(edge_distance=1.5, edge_hard_distance=0.4, obstacle_distance=0.3)
+        params = RandomWalkParams(edge_distance=1.5, edge_margin=0.4, obstacle_distance=0.3)
 
         def edge_triggers(use_centroid):
             return sum(len(simulate(world, params, seed, tmax=500.0, fence=fence,
@@ -215,11 +215,13 @@ class WalkTests(unittest.TestCase):
 
     def edge_turn(self, interior, seed=1, spread=30.0):
         params = RandomWalkParams(require_geofence=False, edge_turn_spread_deg=spread, edge_distance=1.5,
-                                  edge_hard_distance=0.5)
+                                  edge_margin=0.5)
         core = RandomWalkCore(params, seed)
         inp = RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.2, geofence_ok=True,
                                interior_angle=interior)
-        core.update(inp, 0.0)                                       # FORWARD -> BACKUP por el borde
+        core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.9, geofence_ok=True,
+                                     interior_angle=interior), 0.0)
+        core.update(inp, 0.6)                                       # se acerco al borde: FORWARD -> BACKUP
         self.assertEqual((core.state, core.reason), (BACKUP, 'edge'))
         v, w = core.update(inp, 10.0)                               # termina el retroceso -> TURN
         self.assertEqual(core.state, TURN)
@@ -267,6 +269,177 @@ class WalkTests(unittest.TestCase):
             core.update(RandomWalkInputs(sonar_min=0.2, sensors_ok=True), 10.0)      # -> TURN
             angle = math.degrees((core.until - 10.0) * params.turn_speed)
             self.assertTrue(90.0 - 1e-6 <= angle <= 135.0 + 1e-6, angle)
+
+
+
+class CercoCercaDeLasParedesTests(unittest.TestCase):
+    """El cerco a 0.5 m de las paredes del cuarto (el caso del bug): nunca cruzar el borde y, si queda afuera, volver a entrar."""
+    FENCE = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+
+    def room(self):
+        return SimWorld.room(10.0, 8.0, corner_radius=0.05)
+
+    def test_no_cruza_el_borde_desde_ningun_arranque_cerca_de_las_paredes(self):
+        starts = [(5.0, 4.0, 0.0), (1.1, 4.0, math.pi), (1.1, 4.0, 0.0), (0.9, 0.9, math.pi * 1.25), (2.0, 7.0, 1.0),
+                  (9.0, 4.0, 0.0), (8.57, 4.0, math.radians(206))]
+        for start in starts:
+            for seed in range(1, 6):
+                core, robot, log = simulate(self.room(), RandomWalkParams(), seed, tmax=200.0, start=start,
+                                            fence=self.FENCE, use_centroid=True)
+                self.assertGreater(log['edge_min'], 0.0, f'{start} semilla {seed}')
+
+    def test_acercamiento_en_diagonal_tambien_dispara(self):
+        # Se acerca al borde a ~0.09 m/s (rumbo casi paralelo): la tendencia de 0.1 m por segundo no lo ve, el margen si
+        fence = [(0.5, 0.5), (9.5, 0.5), (9.5, 7.5), (0.5, 7.5)]
+        params = RandomWalkParams(edge_distance=0.6, obstacle_distance=0.3)
+        core, robot, log = simulate(self.room(), params, 2, tmax=120.0, start=(5.0, 4.0, 0.0), fence=fence, use_centroid=True)
+        self.assertGreater(log['edge_min'], 0.0)
+
+    def test_mirando_al_interior_dentro_del_margen_no_retrocede_hacia_el_borde(self):
+        core = RandomWalkCore(RandomWalkParams(), seed=1)
+        t = 0.0
+        for edge in (0.45, 0.46, 0.47, 0.48):                           # dentro del margen, alejandose, mirando al centroide
+            v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=edge, geofence_ok=True,
+                                                interior_angle=0.2), t)
+            self.assertEqual((core.state, v), (FORWARD, 0.2), edge)
+            t += 0.3
+
+    def test_mirando_hacia_afuera_dentro_del_margen_hace_la_maniobra_de_borde(self):
+        core = RandomWalkCore(RandomWalkParams(), seed=1)
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.4, geofence_ok=True,
+                                            interior_angle=2.8), 0.0)
+        self.assertEqual((core.state, core.reason, v), (BACKUP, 'edge', -0.15))
+
+    def test_el_retroceso_se_corta_si_lleva_hacia_un_borde_muy_cercano(self):
+        core = RandomWalkCore(RandomWalkParams(edge_backup_stop_distance=0.15), seed=1)
+        core.update(RandomWalkInputs(sonar_min=0.3, sensors_ok=True, edge_distance=0.40, geofence_ok=True,
+                                     interior_angle=None), 0.0)                      # obstaculo: retrocede
+        self.assertEqual(core.state, BACKUP)
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.30, geofence_ok=True), 0.5)
+        self.assertEqual((core.state, v), (BACKUP, -0.15))                           # sigue: aun lejos del limite
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.12, geofence_ok=True), 1.0)
+        self.assertEqual((core.state, v), (TURN, 0.0))                               # corta antes de cruzarlo
+
+    # ── recuperacion fuera del cerco ──
+
+    def test_arranca_afuera_a_0_3_m_y_vuelve_a_entrar(self):
+        fence = [(2.0, 2.0), (8.0, 2.0), (8.0, 6.0), (2.0, 6.0)]
+        world = SimWorld.room(10.0, 8.0, corner_radius=0.05)
+        for yaw in (0.0, math.pi / 2, math.pi, -math.pi / 2, 2.5):
+            core, robot, log = simulate(world, RandomWalkParams(), 3, tmax=60.0, start=(1.7, 4.0, yaw), fence=fence,
+                                        use_centroid=True)
+            self.assertIn(RECOVER, log['states'], yaw)
+            self.assertEqual(log['collisions'], 0, yaw)
+            entered = next((i for i, (x, y) in enumerate(log['xy']) if signed_distance((x, y), fence) > 0.0), None)
+            self.assertIsNotNone(entered, f'rumbo {yaw:.2f}: nunca volvio a entrar')
+            self.assertLess(entered * DT, 25.0, yaw)
+            # y una vez adentro sigue la caminata sin volver a salir
+            self.assertTrue(all(signed_distance(xy, fence) > -0.05 for xy in log['xy'][entered + 40:]), yaw)
+
+    def test_pegado_a_la_pared_afuera_del_cerco_tambien_vuelve(self):
+        # el caso del bug: (0.30, 4.41) esta 0.2 m afuera del cerco a 0.5 m de la pared oeste y con la pared a 0.3 m
+        for deg in (0, 90, 135, 180, 225, 270):
+            core, robot, log = simulate(self.room(), RandomWalkParams(), 3, tmax=120.0,
+                                        start=(0.30, 4.41, math.radians(deg)), fence=self.FENCE, use_centroid=True)
+            entered = next((i for i, (x, y) in enumerate(log['xy']) if signed_distance((x, y), self.FENCE) > 0.0), None)
+            self.assertIsNotNone(entered, f'rumbo {deg}: sigue afuera')
+            self.assertLess(entered * DT, 30.0, deg)
+
+    def test_a_2_m_del_borde_se_queda_quieto_y_avisa(self):
+        fence = [(3.0, 2.0), (8.0, 2.0), (8.0, 6.0), (3.0, 6.0)]
+        world = SimWorld.room(10.0, 8.0, corner_radius=0.05)
+        core, robot, log = simulate(world, RandomWalkParams(), 3, tmax=20.0, start=(1.0, 4.0, 0.0), fence=fence,
+                                    use_centroid=True)                       # 2 m afuera
+        self.assertIn('outside_fence', log['alerts'])
+        self.assertEqual(max(abs(v) for v in log['v']), 0.0)
+        self.assertEqual(max(abs(w) for w in log['w']), 0.0)
+        self.assertEqual((robot.x, robot.y), (1.0, 4.0))
+
+    def test_sin_centroide_afuera_se_queda_quieto_y_avisa(self):
+        core = RandomWalkCore(RandomWalkParams(), seed=1)
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.3, geofence_ok=True,
+                                            interior_angle=None), 0.0)
+        self.assertEqual((v, w, core.alert), (0.0, 0.0, 'outside_fence'))
+
+    def test_en_el_limite_de_recuperacion(self):
+        p = RandomWalkParams(max_outside_recovery=1.0)
+        for dist, moves in ((-0.99, True), (-1.01, False)):
+            core = RandomWalkCore(p, seed=1)
+            v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=dist, geofence_ok=True,
+                                                interior_angle=0.0), 0.0)
+            self.assertEqual((v, w) != (0.0, 0.0), moves, dist)
+            self.assertEqual(core.alert, None if moves else 'outside_fence', dist)
+
+    def test_recuperacion_gira_en_el_lugar_y_luego_avanza_despacio(self):
+        p = RandomWalkParams()
+        core = RandomWalkCore(p, seed=1)
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=1.5), 0.0)
+        self.assertEqual((core.state, v, w), (RECOVER, 0.0, p.turn_speed))             # antihorario: el centroide esta a la izquierda
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=-1.5), 0.1)
+        self.assertEqual((v, w), (0.0, -p.turn_speed))
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=0.05), 0.2)
+        self.assertEqual(v, p.recover_speed)
+        self.assertLessEqual(abs(w), 0.3)
+
+    def test_con_un_obstaculo_adelante_gira_mas_antes_de_avanzar(self):
+        p = RandomWalkParams()
+        core = RandomWalkCore(p, seed=1)
+        t = 0.0
+        for sonar in (0.3, 0.3, 0.3):                                                  # alineado al centroide, pero hay algo adelante
+            v, w = core.update(RandomWalkInputs(sonar_min=sonar, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                                interior_angle=0.05), t)
+            self.assertEqual(v, 0.0)
+            self.assertEqual(abs(w), p.turn_speed)
+            t += 0.1
+        self.assertGreater(w, 0.0)                                                     # gira hacia el lado del centroide
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=0.9), t)                    # se despejo, aunque ya no apunta al centroide
+        self.assertEqual((v, w), (p.recover_speed, 0.0))                               # avanza recto un rato antes de volver a apuntar
+
+    def test_bumper_trasero_o_lateral_afuera_avanza_en_vez_de_girar(self):
+        p = RandomWalkParams()
+        for kw in (dict(back_bumper=True), dict(side_bumper=True)):
+            core = RandomWalkCore(p, seed=1)
+            v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                                interior_angle=2.0, **kw), 0.0)
+            self.assertEqual((v, w), (p.recover_speed, 0.0), kw)
+
+    def test_llega_un_cerco_nuevo_con_el_robot_en_marcha_y_afuera(self):
+        core = RandomWalkCore(RandomWalkParams(), seed=1)
+        t = 0.0
+        for _ in range(20):                                                            # caminando con el cerco viejo
+            core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=3.0, geofence_ok=True), t)
+            t += 0.05
+        self.assertEqual(core.state, FORWARD)
+        for _ in range(10):                                                            # el cerco se esta reconvirtiendo: NaN -> None
+            v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=None, geofence_ok=False), t)
+            self.assertEqual((v, w, core.alert), (0.0, 0.0, 'geofence_not_ready'))
+            t += 0.05
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=1.0), t)                    # cerco nuevo: el robot quedo afuera
+        self.assertEqual(core.state, RECOVER)
+        self.assertNotEqual((v, w), (0.0, 0.0))
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=0.1, geofence_ok=True,
+                                            interior_angle=0.1), t + 5.0)
+        self.assertEqual((core.state, v), (FORWARD, 0.2))                              # al entrar (mirando adentro) retoma la caminata
+
+    def test_recover_timeout(self):
+        p = RandomWalkParams(recover_timeout_s=10.0)
+        core = RandomWalkCore(p, seed=1)
+        core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True, interior_angle=0.0), 0.0)
+        v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=-0.2, geofence_ok=True,
+                                            interior_angle=0.0), 11.0)
+        self.assertEqual((v, w, core.alert), (0.0, 0.0, 'outside_fence'))
+
+    def test_sin_cerco_listo_nunca_se_mueve(self):
+        core = RandomWalkCore(RandomWalkParams(), seed=1)
+        for status_ok, edge in ((False, None), (False, -0.3), (False, 5.0), (True, None)):
+            v, w = core.update(RandomWalkInputs(sonar_min=1.5, sensors_ok=True, edge_distance=edge, geofence_ok=status_ok,
+                                                interior_angle=0.0), 0.0)
+            self.assertEqual((v, w, core.alert), (0.0, 0.0, 'geofence_not_ready'), (status_ok, edge))
 
 
 if __name__ == '__main__':

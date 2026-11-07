@@ -1,5 +1,9 @@
 """Caminata aleatoria: AVANZAR -> (obstaculo, bumper o borde del cerco) -> RETROCEDER -> GIRAR -> AVANZAR.
 
+Fuera del cerco (distancia al borde negativa): RECUPERAR. Gira en el lugar hacia el centroide y avanza despacio hasta volver
+a entrar; si esta a mas de `max_outside_recovery` del borde, o no se conoce el centroide, se queda quieto y avisa
+`outside_fence`. Sin cerco listo (`geofence_not_ready`) tampoco se mueve.
+
 Sin ROS. Los giros son por tiempo (sin realimentacion de rumbo): para una caminata al azar alcanza.
 """
 import math
@@ -12,6 +16,7 @@ FORWARD = 'FORWARD'
 BACKUP = 'BACKUP'
 TURN = 'TURN'
 BLOCKED = 'BLOCKED'
+RECOVER = 'RECOVER'
 
 
 @dataclass
@@ -27,12 +32,20 @@ class RandomWalkParams:
     edge_turn_spread_deg: float = 30.0  # con pose y cerco: gira hacia el centroide +- esta variacion al azar
     obstacle_distance: float = 0.50     # sonar [m]; por debajo se considera obstaculo
     edge_distance: float = 1.5          # distancia al borde del cerco [m]; mayor que el error del GPS
-    edge_hard_distance: float = 0.5     # por debajo de esto el borde dispara siempre, aunque no se acerque
+    edge_margin: float = 0.5            # [m] por debajo de esto y avanzando hacia el borde: maniobra de borde (retroceso y giro
+                                        # al centroide) antes de cruzarlo. Si ya mira al interior no dispara (no retrocede hacia el borde)
+    edge_backup_stop_distance: float = 0.15   # [m] el retroceso se corta si el borde esta a menos de esto y se sigue acercando
     edge_trend_window_s: float = 1.0    # dentro de la franja solo dispara si se esta acercando al borde
     edge_trend_eps: float = 0.1         # [m] de acercamiento en la ventana que cuenta como "acercandose"
     require_geofence: bool = True       # sin cerco OK el robot no se mueve
     stuck_triggers: int = 6             # tantos disparos en stuck_window_s = atrapado
     stuck_window_s: float = 30.0
+    # Fuera del cerco
+    max_outside_recovery: float = 1.0   # [m] a menos de esto fuera del borde se recupera; mas lejos se queda quieto (outside_fence)
+    recover_speed: float = 0.1          # m/s al volver a entrar
+    recover_turn_tolerance_deg: float = 20.0   # gira en el lugar hasta apuntar al centroide dentro de esta tolerancia
+    recover_clear_time_s: float = 1.5   # tras esquivar un obstaculo avanza recto este tiempo antes de volver a apuntar
+    recover_timeout_s: float = 60.0     # si no logra entrar en este tiempo se queda quieto (outside_fence)
 
 
 @dataclass
@@ -64,6 +77,10 @@ class RandomWalkCore:
         self.edge_history = deque()
         self.n_backups = 0
         self.last_turn_angle = 0.0          # giro elegido en el ultimo GIRAR [rad, con signo]
+        self.backup_edge0: Optional[float] = None   # distancia al borde al empezar el retroceso
+        self.recover_since = 0.0
+        self.avoiding = False               # esquivando un obstaculo mientras se recupera
+        self.avoid_until = 0.0
 
     def update(self, inp: RandomWalkInputs, now: float):
         """Devuelve (v, w). `self.alert` queda con la alerta vigente (None si no hay)."""
@@ -74,6 +91,12 @@ class RandomWalkCore:
             return self._block('sensor_timeout')
         if p.require_geofence and not (inp.geofence_ok and inp.edge_distance is not None):
             return self._block('geofence_not_ready')
+        if inp.edge_distance is not None and inp.edge_distance < 0.0:
+            return self._recover(inp, now)               # fuera del cerco
+        if self.state == RECOVER:                        # volvio a entrar
+            self.state = FORWARD
+            self.edge_history.clear()
+            self.avoiding = False
         if self.state == BLOCKED:
             self.state = FORWARD
 
@@ -93,11 +116,12 @@ class RandomWalkCore:
                 self._start_turn(now, inp)
                 return 0.0, self.turn_sign * p.turn_speed
             self.state = BACKUP
+            self.backup_edge0 = inp.edge_distance
             self.until = now + p.backup_distance / p.backup_speed
             return -p.backup_speed, 0.0
 
         if self.state == BACKUP:
-            if inp.back_bumper or now >= self.until:
+            if inp.back_bumper or now >= self.until or self._backup_near_edge(inp):
                 self._start_turn(now, inp)
                 return 0.0, self.turn_sign * p.turn_speed
             return -p.backup_speed, 0.0
@@ -115,14 +139,21 @@ class RandomWalkCore:
             return 'bumper'
         if inp.sonar_min is not None and inp.sonar_min < self.p.obstacle_distance:
             return 'obstacle'
-        if inp.edge_distance is not None and self._edge_trigger(inp.edge_distance, now):
+        if inp.edge_distance is not None and self._edge_trigger(inp.edge_distance, inp.interior_angle, now):
             return 'edge'
         return None
 
-    def _edge_trigger(self, edge: float, now: float) -> bool:
-        """Dentro de la franja del borde solo dispara si se acerca (o ya esta demasiado cerca).
+    def _backup_near_edge(self, inp: RandomWalkInputs) -> bool:
+        """El retroceso (a ciegas respecto del cerco) se corta si lleva hacia un borde que ya esta muy cerca."""
+        e0, e = self.backup_edge0, inp.edge_distance
+        return e0 is not None and e is not None and e < self.p.edge_backup_stop_distance and e < e0 - 0.01
 
-        Asi puede arrancar cerca del borde sin quedar en un bucle de retrocesos, y sale hacia adentro.
+    def _edge_trigger(self, edge: float, interior_angle: Optional[float], now: float) -> bool:
+        """Dispara dentro de la franja `edge_distance` si se acerca al borde. Por debajo de `edge_margin` tambien, pero solo si
+        avanza hacia el borde (la distancia baja o mira hacia afuera del centroide; sin ningun dato, por prudencia).
+
+        Asi puede arrancar cerca del borde y, tras girar hacia el centroide, no vuelve a disparar un retroceso que lo
+        llevaria hacia el borde.
         """
         p = self.p
         hist = self.edge_history
@@ -132,9 +163,12 @@ class RandomWalkCore:
         hist.append((now, edge))
         if edge >= p.edge_distance:
             return False
-        if edge < p.edge_hard_distance:
-            return True
-        return reference is not None and edge < reference - p.edge_trend_eps
+        approaching = reference is not None and edge < reference - p.edge_trend_eps
+        if edge < p.edge_margin:
+            closing = reference is not None and edge < reference - 0.02           # se acerca, aunque sea en diagonal
+            facing_out = interior_angle is not None and abs(interior_angle) > math.pi / 2.0
+            return closing or facing_out or (reference is None and interior_angle is None)
+        return approaching
 
     def _start_turn(self, now: float, inp: RandomWalkInputs) -> None:
         p = self.p
@@ -152,6 +186,40 @@ class RandomWalkCore:
         self.last_turn_angle = self.turn_sign * magnitude
         self.state = TURN
         self.until = now + magnitude / p.turn_speed
+
+    def _recover(self, inp: RandomWalkInputs, now: float):
+        """Fuera del cerco: gira en el lugar hacia el centroide y avanza despacio hasta volver a entrar."""
+        p = self.p
+        if self.state != RECOVER:
+            self.state = RECOVER
+            self.reason = 'outside'
+            self.recover_since = now
+            self.avoiding = False
+            self.avoid_until = 0.0
+        if (-inp.edge_distance > p.max_outside_recovery or inp.interior_angle is None
+                or now - self.recover_since > p.recover_timeout_s):
+            self.alert = 'outside_fence'
+            return 0.0, 0.0
+        angle = inp.interior_angle
+        obstacle = inp.front_bumper or (inp.sonar_min is not None and inp.sonar_min < p.obstacle_distance)
+        if obstacle:                                         # el safety_gate no dejaria avanzar: gira mas antes
+            if not self.avoiding:
+                self.avoiding = True
+                self.turn_sign = 1.0 if angle >= 0.0 else -1.0
+            self.avoid_until = 0.0
+            return 0.0, self.turn_sign * p.turn_speed
+        if inp.back_bumper or inp.side_bumper:               # la cola o un costado rozan: girar en el lugar la arrastraria, se separa avanzando
+            self.avoid_until = now + p.recover_clear_time_s
+            return p.recover_speed, 0.0
+        if self.avoiding:                                    # se despejo: avanza recto un rato antes de volver a apuntar
+            self.avoiding = False
+            self.avoid_until = now + p.recover_clear_time_s
+        if now < self.avoid_until:
+            return p.recover_speed, 0.0
+        if abs(angle) > math.radians(p.recover_turn_tolerance_deg):
+            self.turn_sign = 1.0 if angle >= 0.0 else -1.0
+            return 0.0, self.turn_sign * p.turn_speed
+        return p.recover_speed, max(-0.3, min(0.3, angle))
 
     def _block(self, alert: str):
         self.state = BLOCKED
