@@ -19,7 +19,7 @@ from geometry_msgs.msg import Point, PoseStamped, Twist, TransformStamped
 from nav_msgs.msg import Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Range
+from sensor_msgs.msg import Imu, Range
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
@@ -69,6 +69,7 @@ class FakeRobot(Node):
         d('path_min_step', 0.02)             # [m] distancia minima entre poses del rastro
         d('path_min_yaw', 0.087)             # [rad] o giro minimo
         d('sensor_rate_hz', 5.0)             # como el firmware
+        d('imu_rate_hz', 20.0)               # /imu/data simulado (con publish_sensors) para que imu_watchdog no corte los modos automaticos; 0 = no publica
         # Angulo de los sonares de las esquinas: parametro compartido (config/robot_geometry.yaml), igual que el URDF,
         # potential_field, coverage_map y perimeter
         d('corner_sonar_angle_deg', CORNER_SONAR_ANGLE_DEG)
@@ -120,6 +121,9 @@ class FakeRobot(Node):
             self.sonar_pubs = {s: self.create_publisher(Range, f'sonar/{s}', 10) for s in SONAR_FRAMES}
             self.bumper_pubs = {n: self.create_publisher(Bool, n, 10) for n in BUMPER_MOUNTS}
             self.create_timer(1.0 / gp('sensor_rate_hz').value, self.publish_sensors)
+            if gp('imu_rate_hz').value > 0.0:
+                self.imu_pub = self.create_publisher(Imu, 'imu/data', 10)
+                self.create_timer(1.0 / gp('imu_rate_hz').value, self.publish_imu)
         self.create_subscription(Twist, gp('cmd_topic').value, self.on_cmd, 10)
         self.create_timer(self.dt, self.tick)
         self.get_logger().info(
@@ -222,6 +226,16 @@ class FakeRobot(Node):
         if self.view is not None:
             self.trail.add(self.robot.x, self.robot.y, self.robot.yaw)
 
+
+    def publish_imu(self):
+        """IMU ideal: yaw absoluto y velocidad angular z del robot simulado."""
+        msg = Imu()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'BerryIMU_Link'
+        msg.orientation.z = math.sin(self.robot.yaw / 2.0)
+        msg.orientation.w = math.cos(self.robot.yaw / 2.0)
+        msg.angular_velocity.z = float(getattr(self.robot, 'w', 0.0))
+        self.imu_pub.publish(msg)
 
     def publish_sensors(self):
         if self.world is None:

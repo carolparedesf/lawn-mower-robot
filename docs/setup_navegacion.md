@@ -291,8 +291,21 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
 El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
 `/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
-`obstacle_stop`, `estop`, `geofence_breach`, `outside_fence`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+`obstacle_stop`, `estop`, `imu_lost`, `geofence_breach`, `outside_fence`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
 El bridge la manda como `alert` en `robot/status`.
+
+### Vigilante del IMU (`imu_watchdog`, `config/imu_watchdog.yaml`)
+
+Los EKF toman el giro **solo del IMU** (`odom0` de `ekf_local` y `ekf_global` fusiona solo `vx`; ver `lawnbot_localization/config`). Si `/imu/data` se calla, el filtro sigue publicando TF
+(`sensor_timeout` 0,2 s solo hace que prediga sin medición) y **nadie se entera**: el rumbo queda solo con la predicción, que no hace decaer la velocidad angular (si el IMU muere girando, el filtro
+sigue "girando") y, en `ekf_global`, sin yaw absoluto. Por eso:
+- `imu_watchdog` mide la edad de `/imu/data`; pasados **`imu_timeout` (0,5 s, parámetro; ≤ 0 lo apaga)** sin mensajes publica **`imu:imu_lost`** en `/nav/alert_in` (la renueva cada segundo y al volver publica `imu:none`).
+  Un IMU que nunca arranca también cuenta (el plazo corre desde que arrancó el vigilante). La lógica está en `safety_logic.imu_is_lost`.
+- El `safety_gate` pone a **cero velocidad lineal y angular** mientras haya `imu_lost` vigente (`alert_ttl`, 3 s) **y** el modo vigente sea automático (`auto_parallel`, `auto_random`, `auto_perimeter`;
+  `safety_logic.imu_blocks_motion`). **`manual`, `idle` y `stop` no se tocan.** `imu_lost` sale por `/nav/safety_alert` → `robot/status` → la app ("Se perdió el IMU: modos automáticos detenidos"),
+  con prioridad justo debajo de `estop`.
+- `fake_robot` publica un `/imu/data` ideal (`imu_rate_hz`, 20 por defecto; 0 = no publica, para probar la pérdida) para que la simulación no dispare la alerta. Escenario [22] de `tools/node_scenarios.py`.
+- Límite: si el propio `imu_watchdog` no corre, no hay alerta (falla abierta). Con `nav.launch.py` arranca siempre. Al levantar el stack puede verse un `imu_lost` breve hasta que llega el primer mensaje del IMU.
 
 ## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
 

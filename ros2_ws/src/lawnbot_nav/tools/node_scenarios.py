@@ -2100,6 +2100,92 @@ def run_corner_sonar_angle():
     check(make(Perimeter, corner_sonar_angle_deg=other).core.p.side_sonar_angle_deg == other, 'cambiar el parametro cambia perimeter')
 
 
+def run_imu_watchdog():
+    print('\n[22] imu_watchdog: imu_lost a los 0,5 s sin /imu/data y el safety_gate detiene los modos automaticos (el manual sigue libre)')
+    import yaml
+    from lawnbot_nav.imu_watchdog import ImuWatchdog
+    from lawnbot_nav.safety_gate import SafetyGate
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    wd_cfg = yaml.safe_load(open(os.path.join(cfg_dir, 'imu_watchdog.yaml')))['imu_watchdog']['ros__parameters']
+    gate_cfg = yaml.safe_load(open(os.path.join(cfg_dir, 'safety_gate.yaml')))['safety_gate']['ros__parameters']
+    check(wd_cfg['imu_timeout'] == 0.5, 'imu_watchdog.yaml: imu_timeout 0,5 s')
+
+    wd = make(ImuWatchdog, **wd_cfg)
+    gate = make(SafetyGate, **gate_cfg)
+    wd_tick, gate_tick = wd.timer(1.0 / wd_cfg['rate_hz']), gate.timer(0.05)
+    state = {'imu': True, 'mode': 'auto_random', 'sent': 0, 'imu_next': 0.0}
+
+    def step(seconds):
+        for _ in range(int(round(seconds / 0.05))):
+            R.advance(0.05)
+            if state['imu'] and R.MONO['t'] >= state['imu_next']:
+                wd.subs['imu/data'](R.Imu())
+                state['imu_next'] = R.MONO['t'] + 0.02                 # 50 Hz
+            if int(round(R.MONO['t'] * 20)) % 2 == 0:
+                wd_tick()
+            for m in wd.pubs['nav/alert_in'].sent[state['sent']:]:
+                gate.subs['nav/alert_in'](m)
+            state['sent'] = len(wd.pubs['nav/alert_in'].sent)
+            if int(R.MONO['t'] * 20) % 20 == 0:
+                gate.subs['nav/active_mode'](R.String(state['mode']))
+            for s_ in ('left', 'center', 'right'):
+                gate.subs[f'sonar/{s_}'](R.Range(1.5))
+            for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+                gate.subs[b_](R.Bool(False))
+            gate.subs['cmd_vel_mux'](_twist(0.2, 0.4))
+            gate_tick()
+        last = gate.pubs['cmd_vel'].last
+        return last.linear.x, last.angular.z
+
+    def alerts():
+        return [m.data for m in wd.pubs['nav/alert_in'].sent]
+
+    step(2.0)
+    check(step(0.5) == (0.2, 0.4) and 'imu:imu_lost' not in alerts(), 'con el IMU publicando: auto_random pasa la orden y no hay alerta')
+    state['imu'] = False
+    step(0.3)
+    check('imu:imu_lost' not in alerts() and step(0.0) == (0.2, 0.4), 'a los 0,3 s sin IMU todavia no hay alerta')
+    step(0.4)
+    check('imu:imu_lost' in alerts(), 'pasados 0,5 s sin /imu/data: publica imu:imu_lost en /nav/alert_in')
+    step(0.2)
+    check(step(0.0) == (0.0, 0.0), 'auto_random con IMU perdido: el gate publica cero (ni avanza ni gira)')
+    check(gate.pubs['nav/safety_alert'].last.data == 'imu_lost', 'y /nav/safety_alert dice imu_lost (llega a robot/status)')
+    n = alerts().count('imu:imu_lost')
+    step(3.0)
+    check(alerts().count('imu:imu_lost') >= n + 2, 'mientras dura renueva la alerta (el gate la vence a los 3 s)')
+    check(step(0.0) == (0.0, 0.0), 'y sigue detenido pasados los 3 s')
+    state['mode'] = 'manual'
+    step(1.2)
+    check(step(0.5) == (0.2, 0.4), 'manual: sigue libre con el IMU perdido (la alerta sigue visible)')
+    check(gate.pubs['nav/safety_alert'].last.data == 'imu_lost', '   y sigue avisando imu_lost')
+    for mode in ('auto_parallel', 'auto_perimeter'):
+        state['mode'] = mode
+        step(1.2)
+        check(step(0.5) == (0.0, 0.0), f'{mode}: tambien se detiene')
+    state['mode'] = 'auto_random'
+    state['imu'] = True
+    step(0.3)
+    check('imu:none' in alerts()[-2:], 'al volver el IMU publica imu:none')
+    check(step(3.5) == (0.2, 0.4) and gate.pubs['nav/safety_alert'].last.data == 'none', 'y los modos automaticos vuelven a andar sin alerta')
+
+    off = make(ImuWatchdog, **dict(wd_cfg, imu_timeout=0.0))
+    off_tick = off.timer(1.0 / wd_cfg['rate_hz'])
+    for _ in range(200):
+        R.advance(0.05)
+        off_tick()
+    check('imu:imu_lost' not in [m.data for m in off.pubs['nav/alert_in'].sent], 'imu_timeout 0: el vigilante queda apagado y nunca da imu_lost')
+    from lawnbot_nav.fake_robot import FakeRobot
+    sim = make(FakeRobot, publish_sensors=True)
+    check('imu/data' in sim.pubs, 'fake_robot publica /imu/data (si no, el vigilante cortaria los modos automaticos en la simulacion)')
+    check('imu/data' not in make(FakeRobot, publish_sensors=True, imu_rate_hz=0.0).pubs, '   y con imu_rate_hz 0 no (para probar la perdida del IMU)')
+    late = make(ImuWatchdog, **wd_cfg)
+    late_tick = late.timer(1.0 / wd_cfg['rate_hz'])
+    for _ in range(20):
+        R.advance(0.05)
+        late_tick()
+    check('imu:imu_lost' in [m.data for m in late.pubs['nav/alert_in'].sent], 'un IMU que nunca publica tambien da imu_lost')
+
+
 if __name__ == '__main__':
     run_geofence_datum()
     run_geofence_navsat()
@@ -2124,4 +2210,5 @@ if __name__ == '__main__':
     run_random_fence_arrival()
     run_geofence_restore_equals_topic()
     run_corner_sonar_angle()
+    run_imu_watchdog()
     print(f"\n{CHECKS['ok']} comprobaciones OK")

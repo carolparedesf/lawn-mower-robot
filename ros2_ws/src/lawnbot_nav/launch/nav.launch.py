@@ -76,6 +76,9 @@ def generate_launch_description():
         Node(package='lawnbot_nav', executable='random_walk', name='random_walk',
              output='screen', parameters=[cfg('random_walk.yaml'), sonar_prefix, use_sim_time]),
 
+        Node(package='lawnbot_nav', executable='imu_watchdog', name='imu_watchdog',
+             output='screen', parameters=[cfg('imu_watchdog.yaml'), use_sim_time]),
+
         Node(package='lawnbot_nav', executable='perimeter', name='perimeter',
              output='screen', parameters=[cfg('perimeter.yaml'), cfg('robot_geometry.yaml'), sonar_prefix, use_sim_time]),
 
