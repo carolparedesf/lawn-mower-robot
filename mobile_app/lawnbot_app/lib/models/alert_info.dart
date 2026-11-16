@@ -21,6 +21,8 @@ const String alertNone = 'none';
 const Map<String, AlertInfo> _table = {
   // Safety gate
   'estop': AlertInfo('estop', 'Parada de emergencia activa', AlertSeverity.error),
+  'imu_lost': AlertInfo('imu_lost',
+      'Se perdió el IMU: modos automáticos detenidos', AlertSeverity.error),
   'sensor_timeout': AlertInfo('sensor_timeout',
       'Sin datos de los sensores: el robot no avanza', AlertSeverity.error),
   'bumper_front': AlertInfo(
@@ -34,6 +36,8 @@ const Map<String, AlertInfo> _table = {
   // Fence and position
   'geofence_breach':
       AlertInfo('geofence_breach', 'El robot salió del cerco', AlertSeverity.error),
+  'outside_fence':
+      AlertInfo('outside_fence', 'El robot salió del cerco', AlertSeverity.error),
   'geofence_not_ready': AlertInfo('geofence_not_ready',
       'El cerco todavía no está listo en el robot', AlertSeverity.warning),
   'no_pose': AlertInfo(
