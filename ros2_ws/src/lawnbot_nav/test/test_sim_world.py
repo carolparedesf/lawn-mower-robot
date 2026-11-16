@@ -211,8 +211,109 @@ class EsquinasRedondeadasTests(unittest.TestCase):
         import yaml
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'sim_room.yaml')
         cfg = yaml.safe_load(open(path))['fake_robot']['ros__parameters']
-        self.assertGreater(cfg['corner_radius'], 0.0)
-        self.assertEqual((cfg['corner_split_deg'], cfg['corner_dead_deg']), (45.0, 0.0))
+        self.assertEqual((cfg['corner_radius'], cfg['corner_split_deg'], cfg['corner_dead_deg']), (0.06, 41.0, 55.0))
+        self.assertEqual(cfg['body_shape'], 'chassis')
+
+
+class HuellaDelChasisTests(unittest.TestCase):
+    """Huella del plano CAD: frente de 400 x 226 mm, trasera de 250 mm, largo 436 mm, esquinas delanteras de 60 mm."""
+
+    def setUp(self):
+        from lawnbot_nav.sim_world import Footprint
+        self.fp = Footprint(corner_radius=0.06, split_deg=41.0, dead_deg=55.0)
+        self.xf = self.fp.front_x
+
+    def test_medidas(self):
+        x0, x1, y0, y1 = self.fp.bbox
+        self.assertAlmostEqual(x1 - x0, 0.436, places=6)
+        self.assertAlmostEqual(y1 - y0, 0.400, places=6)
+        self.assertAlmostEqual(self.xf - self.fp.x_step, 0.226, places=6)
+        ys_rear = {round(p[1], 6) for p in self.fp.outline if p[0] < self.fp.x_step - 1e-9}
+        self.assertEqual(ys_rear, {-0.125, 0.125})                              # trasera de 250 mm
+
+    def test_no_es_un_rectangulo(self):
+        """Una pared junto a la trasera (que un rectangulo de 400 mm tocaria) no choca; junto al frente si."""
+        world = SimWorld(walls=[((4.9, 0.16), (4.78, 0.16))], footprint=self.fp)
+        self.assertFalse(world.collides((5.0, 0.0, 0.0)))                      # x de la pared: detras del escalon
+        legacy = SimWorld(walls=[((4.9, 0.16), (4.78, 0.16))])
+        self.assertTrue(legacy.collides((5.0, 0.0, 0.0)))
+        front = SimWorld(walls=[((5.1, 0.17), (5.2, 0.17))], footprint=self.fp)
+        self.assertTrue(front.collides((5.0, 0.0, 0.0)))                        # junto al bloque delantero (ancho 400)
+
+    def test_los_bumpers_frontales_entran_en_el_arco_hasta_13_grados(self):
+        r, yf = self.fp.corner_radius, 0.2
+        b1 = self.fp.zones['bumper/B1_front_left']
+        far = max(p[1] for p in b1)
+        self.assertAlmostEqual(far, (yf - r) + r * math.sin(math.radians(41.0 - 27.5)), delta=0.002)
+        self.assertAlmostEqual(self.xf - min(p[0] for p in b1 if p[1] == far), r * (1 - math.cos(math.radians(13.5))), delta=0.002)
+
+    def test_los_laterales_empiezan_a_38_mm_del_frente(self):
+        for name in ('bumper/B3_left', 'bumper/B4_right'):
+            depth = self.xf - max(p[0] for p in self.fp.zones[name])
+            self.assertAlmostEqual(depth, 0.038, delta=0.004)                   # ~68 grados del arco
+            self.assertGreaterEqual(min(p[0] for p in self.fp.zones[name]), self.fp.x_step - 1e-9)   # hasta el escalon
+
+    def test_zona_sin_bumper_de_55_grados_centrada_en_41(self):
+        dead = self.fp.unprotected['dead']
+        self.assertGreater(len(dead), 5)
+        r = self.fp.corner_radius
+        for x, y in dead:
+            alpha = math.degrees(math.atan2(abs(y) - (0.2 - r), x - (self.xf - r)))
+            self.assertTrue(13.5 - 1e-6 <= alpha <= 68.5 + 1e-6, alpha)
+        alphas = [math.degrees(math.atan2(abs(y) - (0.2 - r), x - (self.xf - r))) for x, y in dead]
+        self.assertAlmostEqual((min(alphas) + max(alphas)) / 2.0, 41.0, delta=3.0)
+        self.assertAlmostEqual(max(alphas) - min(alphas), 55.0, delta=5.0)
+
+    def test_trasero_centrado_y_sin_bumper_en_los_costados_traseros(self):
+        b5 = self.fp.zones['bumper/B5_back']
+        self.assertAlmostEqual(sum(p[1] for p in b5) / len(b5), 0.0, places=9)
+        self.assertTrue(all(abs(p[0] - self.fp.x_rear) < 1e-9 for p in b5))
+        self.assertGreater(len(self.fp.unprotected['rear_side']), 0)
+        for name, pts in self.fp.zones.items():                                 # ningun punto en dos bumpers
+            for other, pts2 in self.fp.zones.items():
+                if name < other:
+                    self.assertFalse(set(pts) & set(pts2))
+
+    def test_un_contacto_en_la_zona_muerta_no_presiona_ningun_bumper(self):
+        r = self.fp.corner_radius
+        a = math.radians(41.0)
+        tip = (self.xf - r + r * math.cos(a), 0.2 - r + r * math.sin(a))        # punto del arco a 41 grados
+        world = SimWorld(circles=[(5.0 + tip[0] + 0.012, tip[1], 0.001)], footprint=self.fp)
+        pose = (5.0, 0.0, 0.0)
+        self.assertFalse(any(world.bumpers(pose).values()))
+        self.assertTrue(world.unprotected_contacts(pose)['dead'])
+        far = SimWorld(circles=[(8.0, 5.0, 0.2)], footprint=self.fp)
+        self.assertFalse(any(far.unprotected_contacts(pose).values()))
+
+    def test_un_contacto_de_frente_presiona_los_dos_frontales(self):
+        world = SimWorld(walls=[((5.22, -2.0), (5.22, 2.0))], footprint=self.fp)
+        pressed = {k for k, v in world.bumpers((5.0, 0.0, 0.0)).items() if v}
+        self.assertEqual(pressed, {'bumper/B1_front_left', 'bumper/B2_front_right'})
+
+    def test_el_mundo_por_defecto_sigue_siendo_el_rectangulo(self):
+        self.assertIsNone(SimWorld().footprint)
+
+    def test_los_yaml_cargan_la_huella_del_chasis(self):
+        import os
+        import yaml
+        for name in ('room', 'field'):
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', f'sim_{name}.yaml')
+            with open(path) as f:
+                cfg = yaml.safe_load(f)['fake_robot']['ros__parameters']
+            self.assertEqual((cfg['body_shape'], cfg['corner_radius'], cfg['corner_split_deg'], cfg['corner_dead_deg']),
+                             ('chassis', 0.06, 41.0, 55.0), name)
+            world = SimWorld.from_config(cfg)
+            self.assertIsNotNone(world.footprint, name)
+            self.assertFalse(world.collides((cfg['x'], cfg['y'], cfg['yaw'])), name)
+
+    def test_el_angulo_de_los_sonares_de_las_esquinas_sale_de_un_parametro(self):
+        from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG, sonar_yaws
+        self.assertEqual(CORNER_SONAR_ANGLE_DEG, 30.0)
+        self.assertEqual(sonar_yaws(25.0), {'left': 25.0, 'center': 0.0, 'right': -25.0})
+        world = SimWorld(walls=[((1.0, -2.0), (1.0, 2.0))], footprint=self.fp)
+        straight = world.sonars((0.0, 0.0, 0.0), sonar_yaws(0.0))['left']
+        angled = world.sonars((0.0, 0.0, 0.0), sonar_yaws(30.0))['left']
+        self.assertGreater(angled, straight)                                    # mirando de costado ve la pared mas lejos
 
 
 if __name__ == '__main__':

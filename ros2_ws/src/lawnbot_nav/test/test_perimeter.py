@@ -28,13 +28,20 @@ def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use
     t, next_sensor = 0.0, 0.0
     ranges, bumpers = {}, {}
     log = {'xy': [], 'states': [], 'collisions': 0, 'lateral': [], 'v': [], 'w': [], 'alerts': set(),
-           'failed_at': None, 'contacts': 0, 'edge_min': math.inf}
+           'failed_at': None, 'contacts': 0, 'edge_min': math.inf,
+           'unprotected': {'dead': 0, 'rear_side': 0, 'step': 0}, 'blocked': False}
+    touching = {}                    # zona sin bumper que esta tocando algo (sin ningun bumper presionado)
     while t < tmax and core.state != FAILED:
         if t >= next_sensor:
             pose = (robot.x, robot.y, robot.yaw)
             ranges = world.sonars(pose, offsets)
             bumpers = world.bumpers(pose)
             log['contacts'] += any(bumpers.values())
+            for zone, hit in world.unprotected_contacts(pose).items():
+                hit = hit and not any(bumpers.values())
+                if hit and not touching.get(zone):
+                    log['unprotected'][zone] += 1                 # flanco de subida: un toque nuevo sin bumper
+                touching[zone] = hit
             next_sensor += SENSOR_DT
         inp = PerimeterInputs(
             sensors_ok=True, side_range=ranges[side] if params.use_side_sonar else None,
@@ -684,6 +691,51 @@ class FieldWorldTests(unittest.TestCase):
         self.assertNotEqual(core.state, FAILED, core.fail_reason)
         self.assertGreater(log['edge_min'], 0.0)
         self.assertGreater(log['contacts'], 10)
+
+
+def sim_yaml_world(name):
+    """El mundo de config/sim_<name>.yaml tal cual lo arma fake_robot: huella del chasis, esquinas y bumpers del YAML."""
+    import os
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', f'sim_{name}.yaml')
+    with open(path) as f:
+        cfg = yaml.safe_load(f)['fake_robot']['ros__parameters']
+    return SimWorld.from_config(cfg), cfg
+
+
+class ChassisFootprintTests(unittest.TestCase):
+    """Con la huella real del chasis (frente ancho, trasera angosta, esquinas de 60 mm, zona sin bumper de ~55 grados):
+    da la vuelta sin perimeter_blocked en room y en field. Los toques sin bumper se cuentan en log['unprotected']."""
+
+    def lap(self, name, side, start, tmax):
+        world, cfg = sim_yaml_world(name)
+        self.assertEqual(cfg['body_shape'], 'chassis')
+        return simulate(world, PerimeterParams(side=side), start, tmax=tmax, use_pose=True)
+
+    def test_room_da_la_vuelta_con_la_pared_a_la_derecha_y_a_la_izquierda(self):
+        for side in ('right', 'left'):
+            core, robot, log = self.lap('room', side, (2.0, 1.0, 0.0), 900.0)
+            self.assertNotEqual(core.fail_reason, 'perimeter_blocked', side)
+            self.assertNotEqual(core.state, FAILED, f'{side}: {core.fail_reason}')
+            self.assertTrue(reached(log['xy'], n=7.5, e=9.5, s=0.5, w=0.5), f'{side}: no dio la vuelta completa')
+            self.assertEqual(log['collisions'], 0, side)
+
+    def test_field_encuentra_la_pared_recta_y_rodea_la_l(self):
+        for side in ('right', 'left'):
+            core, robot, log = self.lap('field', side, (15.0, 15.0, 0.0), 800.0)
+            self.assertNotEqual(core.state, FAILED, f'{side}: {core.fail_reason}')
+            self.assertTrue(any(y > 21.0 for x, y in log['xy']) and any(y < 9.0 for x, y in log['xy']), side)
+        core, robot, log = self.lap('field', 'right', (15.0, 15.0, math.pi), 1500.0)
+        self.assertNotEqual(core.state, FAILED, core.fail_reason)
+        xy = log['xy']
+        self.assertTrue(any(y > 16.3 for x, y in xy) and any(x < 8.7 for x, y in xy)
+                        and any(x > 12.3 for x, y in xy if 12.0 < y < 13.6) and any(y < 12.7 for x, y in xy))
+
+    def test_se_cuentan_los_toques_sin_bumper(self):
+        core, robot, log = self.lap('room', 'right', (2.0, 1.0, 0.0), 300.0)
+        self.assertEqual(set(log['unprotected']), {'dead', 'rear_side', 'step'})
+        self.assertGreaterEqual(sum(log['unprotected'].values()), 0)
+        self.assertGreater(log['contacts'], 10)                               # el resto de los toques si presiona un bumper
 
 
 if __name__ == '__main__':

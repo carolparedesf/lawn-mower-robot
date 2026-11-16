@@ -33,14 +33,14 @@ def sim_world(name):
     w, o = p['walls'], p['obstacles']
     walls = [((w[i], w[i + 1]), (w[i + 2], w[i + 3])) for i in range(0, len(w) - 3, 4)]
     circles = [(o[i], o[i + 1], o[i + 2]) for i in range(0, len(o) - 2, 3)]
-    return SimWorld(walls, circles, corner_radius=p['corner_radius']), p
+    return SimWorld.from_config(p), p
 
 
 class MundoCampoTests(unittest.TestCase):
     def test_campo_de_30_m_con_borde_lejano_y_arranque_al_centro(self):
         p = world_cfg('field')
         self.assertEqual((p['x'], p['y']), (15.0, 15.0))
-        self.assertEqual(len(p['walls']), 16)                      # solo el borde exterior: 4 segmentos
+        self.assertEqual(len(p['walls']), 28)                      # borde exterior (4 segmentos), pared recta (1) y L (2)
         xs, ys = p['walls'][0::2], p['walls'][1::2]
         self.assertLessEqual(min(xs), -5.0)
         self.assertGreaterEqual(max(xs), 35.0)
