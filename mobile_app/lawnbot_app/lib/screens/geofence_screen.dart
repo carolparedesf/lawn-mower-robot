@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,6 +11,8 @@ import '../models/geofence.dart';
 import '../widgets/coverage_overlay.dart';
 import '../widgets/geofence_notices.dart';
 import '../widgets/geofence_toolbar.dart';
+import '../widgets/geofence_vertex_actions.dart';
+import '../widgets/rectangle_dialog.dart';
 import '../widgets/robot_marker.dart';
 import '../widgets/robo_top_bar.dart';
 
@@ -29,6 +32,33 @@ class GeofenceScreen extends StatefulWidget {
 class _GeofenceScreenState extends State<GeofenceScreen> {
   final MapController _mapController = MapController();
   bool _centeredOnRobot = false;
+  bool _pickingCorner = false;
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // Re-evaluates whether the last robot position is still fresh (< 3 s).
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _onMapTap(GeofenceProvider geofence, LatLng latlng) async {
+    if (!_pickingCorner) {
+      geofence.addPoint(latlng);
+      return;
+    }
+    setState(() => _pickingCorner = false);
+    final vertices = await showRectangleDialog(context, latlng);
+    if (vertices != null) geofence.setPoints(vertices);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -93,7 +123,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                     options: MapOptions(
                       initialCenter: center,
                       initialZoom: 18,
-                      onTap: (_, latlng) => geofence.addPoint(latlng),
+                      onTap: (_, latlng) => _onMapTap(geofence, latlng),
                     ),
                     children: [
                       TileLayer(
@@ -179,15 +209,19 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                             color: Colors.white.withValues(alpha: 0.92),
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          child: const Text(
-                            'Tocá el mapa para agregar puntos',
-                            style: TextStyle(
+                          child: Text(
+                            _pickingCorner
+                                ? 'Tocá el mapa en una esquina del rectángulo'
+                                : 'Tocá el mapa para agregar puntos',
+                            style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
                               color: RoboColors.darkGreen,
                             ),
                           ),
                         ),
+                        const SizedBox(height: 6),
+                        const GeofenceSizeLabel(),
                         const SizedBox(height: 6),
                         const GeofenceProblemBanner(),
                         const SizedBox(height: 6),
@@ -197,15 +231,31 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                       ],
                     ),
                   ),
-                  const Positioned(
+                  Positioned(
                     bottom: 12,
                     left: 0,
                     right: 0,
-                    child: Center(child: GeofenceToolbar()),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GeofenceVertexActions(
+                          pickingCorner: _pickingCorner,
+                          onAddAtRobot: (robotPos != null &&
+                                  robotPos.isFresh(DateTime.now()))
+                              ? () => geofence
+                                  .addPoint(LatLng(robotPos.lat, robotPos.lng))
+                              : null,
+                          onRectangle: () =>
+                              setState(() => _pickingCorner = !_pickingCorner),
+                        ),
+                        const SizedBox(height: 8),
+                        const GeofenceToolbar(),
+                      ],
+                    ),
                   ),
                   Positioned(
                     right: 12,
-                    bottom: 76,
+                    bottom: 120,
                     child: FloatingActionButton.small(
                       key: const Key('center_on_robot'),
                       heroTag: 'center_on_robot',
