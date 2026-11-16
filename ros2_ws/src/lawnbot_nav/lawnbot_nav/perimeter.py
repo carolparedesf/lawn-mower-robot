@@ -3,20 +3,23 @@
 
 Modo base: por contacto con el bumper lateral (B3 izquierda, B4 derecha). Al tocar retrocede derecho un
 poco y se aleja girando. El sonar lateral es un refinamiento opcional (use_side_sonar) que solo se usa con
-side_sonar_angle_deg valido. Si pierde el borde o se traba, se detiene y avisa por /nav/alert_in
-(perimeter_lost, perimeter_blocked). La salida pasa por twist_mux y safety_gate.
+side_sonar_angle_deg valido. Sin pared a la vista avanza recto hasta el primer contacto o sonar (girando hacia
+el interior del cerco al acercarse a su borde) y se rinde tras search_timeout_s. Si pierde el borde o se traba,
+se detiene y avisa por /nav/alert_in (perimeter_lost, perimeter_blocked). La salida pasa por twist_mux y safety_gate.
 """
+import math
 import time
 from dataclasses import fields
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PolygonStamped, Twist
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from sensor_msgs.msg import Range
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Float32, String
 from tf2_ros import Buffer, TransformListener
 
+from lawnbot_nav.geofence_logic import polygon_centroid
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.perimeter_logic import (PerimeterCore, PerimeterInputs,
                                          PerimeterParams)
@@ -48,6 +51,8 @@ class Perimeter(Node):
         d('frame_id', 'odom')
         d('base_frame', 'base_footprint')
         d('pose_timeout', 0.5)
+        d('seed', -1)                          # -1: semilla al azar; otro valor: reproducible (giros hacia el interior del cerco)
+        d('geofence_frame_id', 'map')          # frame del cerco, para girar hacia su centroide en la busqueda inicial
         defaults = PerimeterParams()
         for field in PARAM_FIELDS:
             d(field, getattr(defaults, field))
@@ -56,7 +61,8 @@ class Perimeter(Node):
         params = PerimeterParams(**{f: gp(f).value for f in PARAM_FIELDS})
         if params.side not in ('left', 'right'):
             raise ValueError("side debe ser 'left' o 'right'")
-        self.core = PerimeterCore(params)
+        seed = gp('seed').value
+        self.core = PerimeterCore(params, None if seed < 0 else seed)
         if params.use_side_sonar and not self.core.sonar_enabled:
             self.get_logger().warn(
                 f'use_side_sonar con side_sonar_angle_deg={params.side_sonar_angle_deg} (minimo 20): '
@@ -68,6 +74,8 @@ class Perimeter(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_warned = False
+        self.geofence_frame = gp('geofence_frame_id').value
+        self.centroid = None
         self.side_sonar = f'sonar/{params.side}'
         self.side_bumper = 'bumper/B3_left' if params.side == 'left' else 'bumper/B4_right'
 
@@ -87,6 +95,8 @@ class Perimeter(Node):
         for name in BUMPER_FRONT + ('bumper/B3_left', 'bumper/B4_right', BUMPER_BACK):
             self.create_subscription(Bool, name, lambda m, n=name: self.on_bumper(n, m),
                                      qos_profile_sensor_data)
+        self.create_subscription(Float32, 'geofence/distance_to_edge', self.on_edge, 10)
+        self.create_subscription(PolygonStamped, 'geofence/polygon', self.on_polygon, LATCHED)
         self.create_subscription(String, 'nav/active_mode', self.on_mode, LATCHED)
         self.create_timer(1.0 / gp('rate_hz').value, self.tick)
         self.get_logger().info(
@@ -98,6 +108,24 @@ class Perimeter(Node):
 
     def on_bumper(self, name, msg):
         self.cache.set(name, 1.0 if msg.data else 0.0, time.monotonic())
+
+    def on_edge(self, msg):
+        self.cache.set('edge', msg.data, time.monotonic())
+
+    def on_polygon(self, msg):
+        points = [(p.x, p.y) for p in msg.polygon.points]
+        frame_ok = (not msg.header.frame_id) or msg.header.frame_id == self.geofence_frame
+        self.centroid = polygon_centroid(points) if len(points) >= 3 and frame_ok else None
+
+    def interior_angle(self):
+        """Giro que deja al robot mirando al centroide del cerco, o None si falta el cerco o la pose en su frame."""
+        if self.centroid is None:
+            return None
+        pose = lookup_pose(self, self.tf_buffer, self.geofence_frame, self.base_frame, self.pose_timeout)
+        if pose is None:
+            return None
+        heading = math.atan2(self.centroid[1] - pose.y, self.centroid[0] - pose.x)
+        return math.atan2(math.sin(heading - pose.yaw), math.cos(heading - pose.yaw))
 
     def on_mode(self, msg):
         self.active_mode = msg.data
@@ -125,7 +153,9 @@ class Perimeter(Node):
             side_bumper=self.cache.pressed(self.side_bumper, now, t),
             front_bumper=self.cache.pressed(BUMPER_FRONT, now, t),
             back_bumper=self.cache.pressed(BUMPER_BACK, now, t),
-            pose=None if pose is None else (pose.x, pose.y))
+            pose=None if pose is None else (pose.x, pose.y),
+            edge_distance=self.cache.get('edge', now, t),
+            interior_angle=self.interior_angle())
 
     def tick(self):
         now = time.monotonic()

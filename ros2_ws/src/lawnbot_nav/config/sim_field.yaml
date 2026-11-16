@@ -1,5 +1,9 @@
-# Campo abierto de 30 m x 30 m para probar la app con cercos dibujados a escala real. Sin paredes interiores: solo un
-# borde exterior lejano (a 5 m del campo, de -5 a 35 en x e y) para que el robot no se escape. Centro del mundo: (15, 15).
+# Campo abierto de 30 m x 30 m para probar la app con cercos dibujados a escala real. Borde exterior lejano (a 5 m del
+# campo, de -5 a 35 en x e y) para que el robot no se escape, y dos barreras para probar auto_perimeter. Centro: (15, 15).
+#   - Pared recta de 12 m en x = 19 (de y = 9 a y = 21), 4 m al este del arranque (15, 15) mirando al este.
+#   - Barrera en L de 3 x 3 m al oeste: esquina en (9, 13), brazos hasta (9, 16) y hasta (12, 13). Desde el arranque
+#     no queda a la vista: para probarla, arrancar fake_robot con x: 15.0, y: 15.0, yaw: 3.14159 (mira al oeste),
+#     que choca con el brazo vertical por dentro de la L.
 # Uso: ros2 launch lawnbot_nav sim_world.launch.py world:=field
 # El cerco de la app se alinea con este mundo con tools/datum_from_fence.py --world field (calcula datum_lat/datum_lng).
 fake_robot:
@@ -20,8 +24,13 @@ fake_robot:
     walls: [-5.0, -5.0, 35.0, -5.0,
             35.0, -5.0, 35.0, 35.0,
             35.0, 35.0, -5.0, 35.0,
-            -5.0, 35.0, -5.0, -5.0]
-    # Tres obstaculos chicos: [x, y, radio, ...]
+            -5.0, 35.0, -5.0, -5.0,
+            # Pared recta de 12 m, 4 m al este del arranque
+            19.0, 9.0, 19.0, 21.0,
+            # Barrera en L de 3 x 3 m (esquina en (9, 13))
+            9.0, 13.0, 9.0, 16.0,
+            9.0, 13.0, 12.0, 13.0]
+    # Tres obstaculos chicos (el ultimo toca el extremo norte de la pared recta): [x, y, radio, ...]
     obstacles: [11.0, 19.0, 0.3,
                 20.0, 11.0, 0.25,
                 19.0, 21.0, 0.4]
