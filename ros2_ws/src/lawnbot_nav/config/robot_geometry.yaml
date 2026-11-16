@@ -1,8 +1,11 @@
-# Geometria del robot compartida: UN solo valor para el angulo de los sonares de las esquinas.
+# Geometria del robot compartida: UN solo valor para el angulo de los sonares de las esquinas y para la separacion de las ruedas.
 # Lo leen fake_robot (sim_world.launch.py), potential_field, coverage_map y perimeter (nav.launch.py), y de aqui sale el yaw de los
 # sonares del URDF (mow_simplified/urdf/mow_simplified.urdf.xacro -> mow_simplified.urdf, ver docs/setup_navegacion.md).
 # Angulo respecto del frente: 0 = mira al frente, 90 = de costado. Positivo hacia afuera (izquierdo +angulo, derecho -angulo).
 # PROVISORIO (30 grados): medirlo en el robot y cambiarlo SOLO aqui (y regenerar el URDF).
+# wheel_separation: distancia entre centros de las ruedas motrices, 0,355 m (igual que base_width del firmware). Solo la lee el URDF
+# (ruedas en y = +-wheel_separation/2); el simulador usa base_width = 0,355 (fake_robot / sim_robot).
 /**:
   ros__parameters:
     corner_sonar_angle_deg: 30.0
+    wheel_separation: 0.355
