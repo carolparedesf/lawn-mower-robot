@@ -6,7 +6,10 @@ import 'package:provider/provider.dart';
 import '../config/mqtt_config.dart';
 import '../providers/connection_provider.dart';
 import '../services/mqtt_service.dart';
-import '../theme/robo_theme.dart';
+
+/// Visual size of the joystick (the logic is independent of it).
+const double joystickBaseSize = 150;
+const double joystickStickSize = 37.5;
 
 class JoystickWidget extends StatefulWidget {
   const JoystickWidget({super.key});
@@ -80,24 +83,11 @@ class _JoystickWidgetState extends State<JoystickWidget> {
           mode: JoystickMode.all,
           listener: _onMove,
           onStickDragEnd: _onEnd,
-          base: JoystickBase(
-            size: 96,
-            color: Colors.white,
-            withBorderCircle: false,
-            arrowsColor: RoboColors.primaryGreen.withValues(alpha: 0.4),
-            boxShadows: const [
-              BoxShadow(
-                color: Color(0x14000000),
-                blurRadius: 10,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          stick: JoystickStick(
-            size: 44,
-            color: RoboColors.primaryGreen,
-            shadowColor: RoboColors.primaryGreen.withValues(alpha: 0.5),
-          ),
+          // Pre-redesign look: flutter_joystick's own defaults (dark gray disc
+          // with double arrows, light ring, blue glowing stick), scaled from
+          // the package's 200/50 to joystickBaseSize / joystickStickSize.
+          base: const JoystickBase(size: joystickBaseSize),
+          stick: const JoystickStick(size: joystickStickSize),
         ),
       ),
     );

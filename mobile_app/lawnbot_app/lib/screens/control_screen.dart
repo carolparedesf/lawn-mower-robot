@@ -247,7 +247,7 @@ class _ControlScreenState extends State<ControlScreen> {
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
-                  height: 108,
+                  height: 156,
                   child: Center(
                     child: _useDpad
                         ? const DpadWidget()
