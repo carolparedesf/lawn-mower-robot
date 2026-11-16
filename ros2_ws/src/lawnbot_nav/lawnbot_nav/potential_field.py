@@ -20,6 +20,7 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
 from tf2_ros import Buffer, TransformListener
 
+from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG, SONAR_MOUNTS, sonar_yaws
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.potential_field_logic import PFCore, PFParams, sonar_point
 from lawnbot_nav.sensor_cache import SONARS, SensorCache
@@ -50,11 +51,12 @@ class PotentialField(Node):
         d('pose_timeout', 0.5)
         d('sonar_max_range', 1.5)              # lecturas >= (max - 0.05) = sin eco: no son obstaculo
         d('sonar_min_range', 0.02)
-        # Montaje de cada sonar: x, y [m] y yaw [grados]. El URDF los pone todos al frente; los 45 grados laterales
-        # son PROVISORIOS (igual que side_sonar_angle_deg de perimeter y fake_robot).
-        d('sonar_left', [0.194, 0.136, 45.0])
-        d('sonar_center', [0.198, 0.0, 0.0])
-        d('sonar_right', [0.193, -0.1435, -45.0])
+        # Montaje de cada sonar: x, y [m]. El yaw de los de las esquinas es el parametro compartido corner_sonar_angle_deg
+        # (config/robot_geometry.yaml, el mismo que lee el URDF, coverage_map, perimeter y fake_robot)
+        d('sonar_left', list(SONAR_MOUNTS['left']))
+        d('sonar_center', list(SONAR_MOUNTS['center']))
+        d('sonar_right', list(SONAR_MOUNTS['right']))
+        d('corner_sonar_angle_deg', CORNER_SONAR_ANGLE_DEG)
         defaults = PFParams()
         names = [f.name for f in fields(PFParams)]
         for n in names:
@@ -69,8 +71,8 @@ class PotentialField(Node):
         self.base_frame, self.progress_frame = gp('base_frame').value, gp('progress_frame').value
         self.pose_timeout = gp('pose_timeout').value
         self.max_range, self.min_range = gp('sonar_max_range').value, gp('sonar_min_range').value
-        self.mounts = {s: (gp(f'sonar_{s}').value[0], gp(f'sonar_{s}').value[1], math.radians(gp(f'sonar_{s}').value[2]))
-                       for s in SONARS}
+        yaws = sonar_yaws(gp('corner_sonar_angle_deg').value)
+        self.mounts = {s: (gp(f'sonar_{s}').value[0], gp(f'sonar_{s}').value[1], math.radians(yaws[s])) for s in SONARS}
         self.topics_by_mode = {m: list(gp(p).value) for m, p in MODES.items()}
 
         self.tf_buffer = Buffer()

@@ -26,7 +26,9 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from lawnbot_nav.sim_robot import SimRobot
 from lawnbot_nav.sim_view import Trail, bumper_polylines, footprint
-from lawnbot_nav.sim_world import (BUMPER_MOUNTS, SONAR_MAX_RANGE, SONAR_MIN_RANGE, SONAR_FOV,
+from lawnbot_nav.robot_geometry import (BODY_FRONT_DEPTH, BODY_FRONT_WIDTH, BODY_LENGTH, BODY_REAR_WIDTH,
+                                        CORNER_SONAR_ANGLE_DEG, sonar_yaws)
+from lawnbot_nav.sim_world import (Footprint, BUMPER_MOUNTS, SONAR_MAX_RANGE, SONAR_MIN_RANGE, SONAR_FOV,
                                    SimWorld)
 
 LATCHED = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -67,7 +69,15 @@ class FakeRobot(Node):
         d('path_min_step', 0.02)             # [m] distancia minima entre poses del rastro
         d('path_min_yaw', 0.087)             # [rad] o giro minimo
         d('sensor_rate_hz', 5.0)             # como el firmware
-        d('side_sonar_yaw_deg', 0.0)         # angulo de los sonares laterales (el URDF los pone en 0)
+        # Angulo de los sonares de las esquinas: parametro compartido (config/robot_geometry.yaml), igual que el URDF,
+        # potential_field, coverage_map y perimeter
+        d('corner_sonar_angle_deg', CORNER_SONAR_ANGLE_DEG)
+        # Huella: 'rectangle' (cuerpo rectangular de antes) o 'chassis' (huella del plano CAD, ver robot_geometry.py)
+        d('body_shape', 'rectangle')
+        d('body_length', BODY_LENGTH)
+        d('body_front_depth', BODY_FRONT_DEPTH)
+        d('body_front_width', BODY_FRONT_WIDTH)
+        d('body_rear_width', BODY_REAR_WIDTH)
 
         gp = self.get_parameter
         self.robot = SimRobot(gp('x').value, gp('y').value, gp('yaw').value,
@@ -87,11 +97,20 @@ class FakeRobot(Node):
         walls = [((w[i], w[i + 1]), (w[i + 2], w[i + 3])) for i in range(0, len(w) - 3, 4)
                  if (w[i], w[i + 1]) != (w[i + 2], w[i + 3])]
         circles = [(o[i], o[i + 1], o[i + 2]) for i in range(0, len(o) - 2, 3)]
+        shape = gp('body_shape').value
+        if shape not in ('rectangle', 'chassis'):
+            raise ValueError("body_shape debe ser 'rectangle' o 'chassis'")
+        footprint = None
+        if shape == 'chassis':
+            footprint = Footprint(length=gp('body_length').value, front_depth=gp('body_front_depth').value,
+                                  front_width=gp('body_front_width').value, rear_width=gp('body_rear_width').value,
+                                  corner_radius=gp('corner_radius').value, split_deg=gp('corner_split_deg').value,
+                                  dead_deg=gp('corner_dead_deg').value)
         self.world = (SimWorld(walls, circles, corner_radius=gp('corner_radius').value,
                                corner_split_deg=gp('corner_split_deg').value,
-                               corner_dead_deg=gp('corner_dead_deg').value) if (walls or circles) else None)
-        yaw = gp('side_sonar_yaw_deg').value
-        self.sonar_yaw = {'left': yaw, 'center': 0.0, 'right': -yaw}
+                               corner_dead_deg=gp('corner_dead_deg').value, footprint=footprint)
+                      if (walls or circles) else None)
+        self.sonar_yaw = sonar_yaws(gp('corner_sonar_angle_deg').value)
 
         self.broadcaster = TransformBroadcaster(self)
         self.view = None
@@ -113,7 +132,8 @@ class FakeRobot(Node):
         self.path_pub = self.create_publisher(Path, 'sim/path', LATCHED)
         self.trail = Trail(gp('path_max_poses').value, gp('path_min_step').value, gp('path_min_yaw').value)
         radius = self.world.corner_radius if self.world is not None else 0.0
-        self.view = {'footprint': footprint(radius),
+        fp = self.world.footprint if self.world is not None else None
+        self.view = {'footprint': (fp.outline + fp.outline[:1]) if fp is not None else footprint(radius),
                      'bumpers': bumper_polylines(self.world.zones) if self.world is not None else {}}
         self.pressed = {}
         self.create_timer(1.0 / gp('markers_rate_hz').value, self.publish_view)

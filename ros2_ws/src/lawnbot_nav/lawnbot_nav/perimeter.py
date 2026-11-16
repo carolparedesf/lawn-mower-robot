@@ -23,6 +23,7 @@ from lawnbot_nav.geofence_logic import polygon_centroid
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.perimeter_logic import (PerimeterCore, PerimeterInputs,
                                          PerimeterParams)
+from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG
 from lawnbot_nav.sensor_cache import (BUMPER_BACK, BUMPER_FRONT, SONARS,
                                       SensorCache)
 from lawnbot_nav.tf_utils import lookup_pose
@@ -52,20 +53,23 @@ class Perimeter(Node):
         d('base_frame', 'base_footprint')
         d('pose_timeout', 0.5)
         d('seed', -1)                          # -1: semilla al azar; otro valor: reproducible (giros hacia el interior del cerco)
+        d('corner_sonar_angle_deg', CORNER_SONAR_ANGLE_DEG)   # config/robot_geometry.yaml: es el side_sonar_angle_deg de PerimeterParams
         d('geofence_frame_id', 'map')          # frame del cerco, para girar hacia su centroide en la busqueda inicial
         defaults = PerimeterParams()
         for field in PARAM_FIELDS:
-            d(field, getattr(defaults, field))
+            if field != 'side_sonar_angle_deg':                # sale de corner_sonar_angle_deg
+                d(field, getattr(defaults, field))
 
         gp = self.get_parameter
-        params = PerimeterParams(**{f: gp(f).value for f in PARAM_FIELDS})
+        params = PerimeterParams(**{f: gp(f).value for f in PARAM_FIELDS if f != 'side_sonar_angle_deg'},
+                                 side_sonar_angle_deg=gp('corner_sonar_angle_deg').value)
         if params.side not in ('left', 'right'):
             raise ValueError("side debe ser 'left' o 'right'")
         seed = gp('seed').value
         self.core = PerimeterCore(params, None if seed < 0 else seed)
         if params.use_side_sonar and not self.core.sonar_enabled:
             self.get_logger().warn(
-                f'use_side_sonar con side_sonar_angle_deg={params.side_sonar_angle_deg} (minimo 20): '
+                f'use_side_sonar con corner_sonar_angle_deg={params.side_sonar_angle_deg} (minimo 20): '
                 'se ignora el sonar lateral y se sigue por bumper')
         self.sensor_timeout = gp('sensor_timeout').value
         self.frame_id = gp('frame_id').value

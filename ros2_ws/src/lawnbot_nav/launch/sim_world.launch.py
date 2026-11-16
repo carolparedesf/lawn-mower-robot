@@ -20,7 +20,7 @@ def launch_fake_robot(context):
     share = get_package_share_directory('lawnbot_nav')
     config = world_config(share, LaunchConfiguration('world').perform(context))
     return [Node(package='lawnbot_nav', executable='fake_robot', name='fake_robot', output='screen',
-                 parameters=[config])]
+                 parameters=[config, os.path.join(share, 'config', 'robot_geometry.yaml')])]
 
 
 def generate_launch_description():

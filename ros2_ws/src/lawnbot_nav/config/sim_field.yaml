@@ -13,14 +13,15 @@ fake_robot:
     publish_sensors: true
     publish_markers: true          # para RViz (config/sim.rviz). Solo simulacion
     sensor_rate_hz: 5.0
-    side_sonar_yaw_deg: 45.0       # sonares laterales a +-45 grados (el URDF los pone al frente)
+    # El angulo de los sonares de las esquinas (corner_sonar_angle_deg) sale de config/robot_geometry.yaml (compartido)
     x: 15.0                        # arranque en el centro del campo
     y: 15.0
     yaw: 0.0
-    # Esquinas del cuerpo: mismos valores provisorios que sim_room.yaml (ver el comentario ahi)
-    corner_radius: 0.05
-    corner_split_deg: 45.0
-    corner_dead_deg: 0.0
+    # Huella del chasis y esquinas delanteras: los mismos valores que sim_room.yaml (ver el comentario ahi)
+    body_shape: chassis
+    corner_radius: 0.06
+    corner_split_deg: 41.0
+    corner_dead_deg: 55.0
     walls: [-5.0, -5.0, 35.0, -5.0,
             35.0, -5.0, 35.0, 35.0,
             35.0, 35.0, -5.0, 35.0,

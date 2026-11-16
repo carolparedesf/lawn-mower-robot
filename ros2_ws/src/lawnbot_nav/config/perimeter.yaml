@@ -42,10 +42,9 @@ perimeter:
     stalled_progress_distance: 0.15  # m
 
     # ── Refinamiento opcional: sonar lateral ──
-    use_side_sonar: false          # solo se usa si ademas side_sonar_angle_deg es valido (>= 20)
-    # En el URDF los tres sonares miran al frente (rpy 0). Para medir la distancia a una pared que corre al
-    # costado hace falta el angulo REAL de montaje respecto del frente (90 = de costado). PROVISORIO: medirlo.
-    side_sonar_angle_deg: 45.0
+    use_side_sonar: false          # solo se usa si ademas corner_sonar_angle_deg es valido (>= 20)
+    # El angulo del sonar lateral respecto del frente (90 = de costado) es corner_sonar_angle_deg (config/robot_geometry.yaml,
+    # compartido con el URDF, fake_robot, potential_field y coverage_map). PROVISORIO: medirlo.
     target_distance: 0.30          # m (no menos: el gate frena con un sonar < 0,30 m salvo que se lo ignore)
     kp: 1.5
     max_range: 1.5

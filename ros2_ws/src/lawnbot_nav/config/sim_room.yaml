@@ -8,17 +8,19 @@ fake_robot:
     # Para RViz (config/sim.rviz): /sim/markers y /sim/path. Solo simulacion
     publish_markers: true
     sensor_rate_hz: 5.0
-    side_sonar_yaw_deg: 45.0       # sonares laterales a +-45 grados (el URDF los pone al frente)
+    # El angulo de los sonares de las esquinas (corner_sonar_angle_deg) sale de config/robot_geometry.yaml (compartido)
     x: 2.0
     y: 1.0
     yaw: 0.0
-    # Esquinas del cuerpo redondeadas (a medir en el robot real; los valores son provisorios). Cada arco se reparte
-    # entre el bumper frontal/trasero (B1/B2/B5) y el lateral (B3/B4) segun el angulo del punto de contacto, medido
-    # desde la cara frontal/trasera: hasta corner_split_deg - corner_dead_deg/2 el frontal/trasero, desde
-    # corner_split_deg + corner_dead_deg/2 el lateral, y en medio (zona muerta) ninguno. corner_radius 0 = cuerpo rectangular.
-    corner_radius: 0.05
-    corner_split_deg: 45.0
-    corner_dead_deg: 0.0
+    # Huella del chasis (plano CAD, mm): frente de 400 de ancho y 226 de profundidad, trasera de 250 de ancho, largo total 436
+    # (body_* en robot_geometry.py). 'rectangle' = el cuerpo rectangular de antes.
+    body_shape: chassis
+    # Esquinas delanteras (radio 60) y reparto de bumpers en cada arco, en grados desde la cara frontal (0) hacia la lateral (90):
+    # B1/B2 entran en el arco hasta corner_split_deg - corner_dead_deg/2 (~13), B3/B4 empiezan en corner_split_deg +
+    # corner_dead_deg/2 (~68, a ~38 mm del frente) y en medio (zona muerta de ~55, centrada en 41) no hay bumper.
+    corner_radius: 0.06
+    corner_split_deg: 41.0
+    corner_dead_deg: 55.0
     walls: [0.0, 0.0, 10.0, 0.0,
             10.0, 0.0, 10.0, 8.0,
             10.0, 8.0, 0.0, 8.0,

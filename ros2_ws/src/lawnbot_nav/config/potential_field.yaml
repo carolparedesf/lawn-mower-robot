@@ -18,10 +18,10 @@ potential_field:
     pose_timeout: 0.5
     sonar_max_range: 1.5
     sonar_min_range: 0.02
-    # Montaje [x, y, yaw en grados]. El yaw lateral (45) es PROVISORIO: el URDF los pone al frente.
-    sonar_left: [0.194, 0.136, 45.0]
-    sonar_center: [0.198, 0.0, 0.0]
-    sonar_right: [0.193, -0.1435, -45.0]
+    # Montaje [x, y]. El yaw de los sonares de las esquinas es corner_sonar_angle_deg (config/robot_geometry.yaml, compartido)
+    sonar_left: [0.194, 0.136]
+    sonar_center: [0.198, 0.0]
+    sonar_right: [0.193, -0.1435]
 
     influence_distance: 0.60                 # m desde el borde del cuerpo (el gate frena a 0,30 y para a 0,15)
     min_distance: 0.15
