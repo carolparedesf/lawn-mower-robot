@@ -2,7 +2,7 @@
 """Ultima barrera antes del firmware: filtra /cmd_vel_mux y publica /cmd_vel.
 
 Solo limita o anula velocidades, nunca las amplifica. Publica a ritmo fijo; si la entrada
-esta vieja publica cero. Las reglas estan en safety_logic.py y los parametros en el YAML.
+esta vieja publica cero. Con la alerta imu_lost (/nav/alert_in, la publica imu_watchdog) y un modo automatico vigente publica cero. Las reglas estan en safety_logic.py y los parametros en el YAML.
 """
 import time
 
@@ -15,8 +15,8 @@ from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
 from lawnbot_nav.safety_logic import (SafetyParams, SafetyState, SonarLimiter,
-                                      apply_safety, ignored_sonars, merge_alerts,
-                                      parse_alert_in)
+                                      apply_safety, ignored_sonars, imu_blocks_motion,
+                                      merge_alerts, parse_alert_in)
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -151,7 +151,7 @@ class SafetyGate(Node):
     def fresh(self, entry, now):
         return entry is not None and now - entry[1] <= self.sensor_timeout
 
-    def build_state(self, now):
+    def build_state(self, now, active_alerts=()):
         ranges = {}
         stale = False
         ignoring = ignored_sonars(self.ignore_sides, self.active_mode,
@@ -181,8 +181,9 @@ class SafetyGate(Node):
         back = any(self.fresh(self.bumper.get(t), now) and self.bumper[t][0]
                    for t in self.back_topics)
 
+        imu_lost_auto = imu_blocks_motion(active_alerts, self.active_mode, now - self.mode_time <= self.mode_timeout)
         return SafetyState(sonar_ranges=ranges, front_pressed=front,
-                           back_pressed=back, stale=stale)
+                           back_pressed=back, stale=stale, imu_lost_auto=imu_lost_auto)
 
     # ── Salida ───────────────────────────────────────────────
 
@@ -193,9 +194,10 @@ class SafetyGate(Node):
         else:
             v_cmd, w_cmd = self.v_in, self.w_in
 
-        state = self.build_state(now)
-        v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params, limiter=self.limiter, now=now)
         external = {src: (alert, now - t) for src, (alert, t) in self.external_alerts.items()}
+        active = {alert for alert, age in external.values() if age <= self.alert_ttl}
+        state = self.build_state(now, active)
+        v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params, limiter=self.limiter, now=now)
         alert = merge_alerts(local_alert, external, self.alert_ttl)
 
         out = Twist()

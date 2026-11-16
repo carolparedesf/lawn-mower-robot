@@ -37,6 +37,7 @@ setup(
             'robot_events = lawnbot_nav.robot_events:main',
             'potential_field = lawnbot_nav.potential_field:main',
             'sonar_filter = lawnbot_nav.sonar_filter:main',
+            'imu_watchdog = lawnbot_nav.imu_watchdog:main',
         ],
     },
 )

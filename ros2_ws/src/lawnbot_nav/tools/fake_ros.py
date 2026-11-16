@@ -134,6 +134,7 @@ class PoseArray:
 class Imu:
     def __init__(self, x=0.0, y=0.0, z=0.0, w=1.0):
         self.header = Header()
+        self.angular_velocity = Vec()
         self.orientation = Quat()
         self.orientation.x, self.orientation.y, self.orientation.z, self.orientation.w = x, y, z, w
 

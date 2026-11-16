@@ -12,11 +12,12 @@ ALERT_BUMPER_FRONT = 'bumper_front'
 ALERT_BUMPER_BACK = 'bumper_back'
 ALERT_OBSTACLE_STOP = 'obstacle_stop'
 ALERT_OBSTACLE_NEAR = 'obstacle_near'
+ALERT_IMU_LOST = 'imu_lost'
 
 # De mayor a menor prioridad. Las alertas de otros nodos llegan por /nav/alert_in ('fuente:alerta')
 ALERT_PRIORITY = (
     ALERT_SENSOR_TIMEOUT, ALERT_BUMPER_FRONT, ALERT_BUMPER_BACK, ALERT_OBSTACLE_STOP,
-    'estop', 'geofence_breach', 'outside_fence', 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
+    'estop', ALERT_IMU_LOST, 'geofence_breach', 'outside_fence', 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
     'random_blocked', 'local_minimum', 'geofence_not_ready', 'coverage_error', 'no_pose',
     'auto_start_timeout', ALERT_OBSTACLE_NEAR,
 )
@@ -25,6 +26,8 @@ ALERT_PRIORITY = (
 # Sonares que pueden ignorarse en auto_perimeter. El central y los bumpers nunca.
 SIDE_SONARS = ('left', 'right')
 PERIMETER_MODE = 'auto_perimeter'
+# Modos automaticos: sin IMU el rumbo no es confiable y se detienen. 'manual' sigue libre (lo maneja una persona)
+AUTOMATIC_MODES = ('auto_parallel', 'auto_random', 'auto_perimeter')
 
 
 @dataclass
@@ -54,6 +57,8 @@ class SafetyState:
     back_pressed: bool = False
     # Algun sensor requerido (sonar habilitado o bumper frontal) sin datos recientes
     stale: bool = False
+    # Se perdio el IMU y el modo vigente es automatico: velocidad lineal y angular a cero (ver imu_blocks_motion)
+    imu_lost_auto: bool = False
 
 
 def clamp_magnitude(value: float, limit: float) -> float:
@@ -158,6 +163,9 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams,
     elif v < 0.0 and state.back_pressed:
         v = 0.0
 
+    if state.imu_lost_auto:
+        v = w = 0.0                                            # rumbo no confiable: ni avanza ni gira (manual no entra aqui)
+
     # Garantia final: nunca amplificar
     v = clamp_magnitude(v, abs(v_in))
     w = clamp_magnitude(w, abs(w_in))
@@ -175,6 +183,20 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams,
     else:
         alert = ALERT_NONE
     return v, w, alert
+
+
+def imu_is_lost(now: float, last_msg: Optional[float], started: float, timeout: float) -> bool:
+    """El IMU esta perdido si no llega un /imu/data hace mas de `timeout` s. Sin ningun mensaje todavia cuenta el tiempo desde
+    `started` (el arranque del vigilante), asi un IMU que nunca arranca tambien se detecta. timeout <= 0 apaga el vigilante."""
+    if timeout <= 0.0:
+        return False
+    reference = started if last_msg is None else last_msg
+    return now - reference > timeout
+
+
+def imu_blocks_motion(active_alerts, mode, mode_fresh: bool) -> bool:
+    """Hay que anular el movimiento: alerta imu_lost vigente y modo automatico vigente (manual, idle, stop y modo viejo no)."""
+    return ALERT_IMU_LOST in active_alerts and mode_fresh and mode in AUTOMATIC_MODES
 
 
 def ignored_sonars(ignore_sides: bool, mode, mode_fresh: bool) -> Tuple[str, ...]:
