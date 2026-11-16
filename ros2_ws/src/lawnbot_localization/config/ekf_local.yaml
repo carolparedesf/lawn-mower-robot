@@ -1,5 +1,6 @@
 # EKF local: publica odom -> base_footprint (unica fuente de ese TF).
-# Entradas: velocidades de la odometria de ruedas + velocidad angular del IMU.
+# Entradas: velocidad lineal vx de la odometria de ruedas + velocidad angular z (vyaw) del IMU.
+# El rumbo sale del giroscopio, NO del ancho de via de las ruedas (odom0 no aporta vyaw).
 # Orden del vector: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
 ekf_local:
   ros__parameters:
@@ -15,18 +16,18 @@ ekf_local:
     base_link_frame: base_footprint
     world_frame: odom
 
-    # Odometria de ruedas: SOLO vx y vyaw (sin pose absoluta)
+    # Odometria de ruedas: SOLO vx (sin pose absoluta y sin vyaw: el giro lo aporta el IMU)
     odom0: /odom/unfiltered
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  false, false,
-                   false, false, true,
+                   false, false, false,
                    false, false, false]
     odom0_differential: false
     odom0_relative: false
     odom0_queue_size: 10
 
-    # IMU: SOLO velocidad angular en z (sin yaw absoluto)
+    # IMU: SOLO velocidad angular en z (sin yaw absoluto). Es la UNICA fuente de vyaw
     imu0: /imu/data
     imu0_config: [false, false, false,
                   false, false, false,
