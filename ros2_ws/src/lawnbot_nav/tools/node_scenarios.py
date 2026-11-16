@@ -623,7 +623,7 @@ def run_random_and_perimeter():
           'shutdown: ambos publican cero')
 
     # sonar lateral pedido con un angulo invalido: se ignora y se sigue por bumper (no falla)
-    bad = make(Perimeter, **dict(pm_cfg, use_side_sonar=True, side_sonar_angle_deg=0.0))
+    bad = make(Perimeter, **dict(pm_cfg, use_side_sonar=True, corner_sonar_angle_deg=0.0))
     check(bad.get_logger().has('se ignora el sonar lateral', 'WARN'), 'use_side_sonar con 0 grados: avisa que se ignora el sonar lateral')
     bad.subs['nav/active_mode'](R.String('auto_perimeter'))
     for s_ in ('left', 'center', 'right'):
@@ -2072,6 +2072,34 @@ def signed_distance_xy(pt, poly):
     return signed_distance(pt, poly)
 
 
+def run_corner_sonar_angle():
+    print('\n[20] un solo parametro, corner_sonar_angle_deg, para fake_robot, potential_field, coverage_map y perimeter')
+    import math
+    import yaml
+    from lawnbot_nav.coverage_map import CoverageMap
+    from lawnbot_nav.fake_robot import FakeRobot
+    from lawnbot_nav.perimeter import Perimeter
+    from lawnbot_nav.potential_field import PotentialField
+    cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
+    shared = yaml.safe_load(open(os.path.join(cfg_dir, 'robot_geometry.yaml')))['/**']['ros__parameters']
+    angle = shared['corner_sonar_angle_deg']
+    check(angle == 30.0, f'robot_geometry.yaml: {angle} grados (provisorio)')
+    for n in ('sim_room.yaml', 'sim_field.yaml', 'potential_field.yaml', 'coverage_map.yaml', 'perimeter.yaml'):
+        text = open(os.path.join(cfg_dir, n)).read()
+        check('side_sonar_yaw_deg:' not in text and 'sonar_left_yaw_deg' not in text and 'side_sonar_angle_deg:' not in text,
+              f'{n}: ya no define su propio angulo de sonares')
+    check(FakeRobot().sonar_yaw == {'left': angle, 'center': 0.0, 'right': -angle}, 'fake_robot: yaw de los sonares por defecto = el compartido')
+    check(PotentialField().mounts['left'][2] == math.radians(angle) and PotentialField().mounts['right'][2] == -math.radians(angle),
+          'potential_field: yaw de los sonares = el compartido')
+    check(CoverageMap().yaw == {'left': angle, 'center': 0.0, 'right': -angle}, 'coverage_map: yaw de los sonares = el compartido')
+    check(Perimeter().core.p.side_sonar_angle_deg == angle, 'perimeter: side_sonar_angle_deg = el compartido')
+    other = 20.0
+    check(make(FakeRobot, corner_sonar_angle_deg=other).sonar_yaw['left'] == other, 'cambiar el parametro cambia fake_robot')
+    check(make(PotentialField, corner_sonar_angle_deg=other).mounts['right'][2] == -math.radians(other), 'cambiar el parametro cambia potential_field')
+    check(make(CoverageMap, corner_sonar_angle_deg=other).yaw['right'] == -other, 'cambiar el parametro cambia coverage_map')
+    check(make(Perimeter, corner_sonar_angle_deg=other).core.p.side_sonar_angle_deg == other, 'cambiar el parametro cambia perimeter')
+
+
 if __name__ == '__main__':
     run_geofence_datum()
     run_geofence_navsat()
@@ -2095,4 +2123,5 @@ if __name__ == '__main__':
     run_sim_view()
     run_random_fence_arrival()
     run_geofence_restore_equals_topic()
+    run_corner_sonar_angle()
     print(f"\n{CHECKS['ok']} comprobaciones OK")
