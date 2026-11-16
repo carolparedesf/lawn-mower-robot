@@ -411,29 +411,54 @@ Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumpe
   `lost_search_timeout_s` (25 s, es el `search_timeout_s` de antes: ahora `search_timeout_s` es solo la búsqueda inicial); si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
 - **Todos los parámetros de contacto están en el YAML** para ajustarlos en el robot (ángulos, distancias, velocidades y tiempos).
 
-**Refinamiento con el sonar lateral (`use_side_sonar: true`):** el sonar del lado de la pared mide la distancia lateral (`lectura × sin(side_sonar_angle_deg)`) y un
+**Refinamiento con el sonar lateral (`use_side_sonar: true`):** el sonar del lado de la pared mide la distancia lateral (`lectura × sin(corner_sonar_angle_deg)`) y un
 control proporcional la mantiene en `target_distance` (0,30 m), con el bumper como contacto de respaldo; las esquinas exteriores se rodean con un arco. **Solo se
-usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar (queda un aviso en el log) y se sigue por bumper, sin fallar.
+usa si `corner_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar (queda un aviso en el log) y se sigue por bumper, sin fallar.
 
 - **Probado con dos formas de bumpers en el simulador:** `test_perimeter.py` da la vuelta completa (pared a derecha e izquierda y el cuarto de `sim_room.yaml`) con las zonas de bumper actuales
   de `sim_world.py` y con las anteriores (esquinas compartidas, que hacían que un contacto lateral en la esquina presionara también B2/B5). Sin `perimeter_blocked` en ninguna. Con las zonas
   actuales la vuelta tarda más (~790 s contra ~480 s en `sim_room`) porque la esquina se resuelve por falta de progreso en vez de por el bumper frontal. Con `corner_radius` > 0 (ver abajo) la vuelta también se completa; la disposición real de
   los bumpers en el chasis hay que medirla en el robot.
+- **Con la huella real del chasis** (`body_shape: chassis`, esquinas de 60 mm, zona sin bumper de ~55°; `ChassisFootprintTests` en `test_perimeter.py`): el perimetral da la vuelta sin `perimeter_blocked`
+  ni choques en `room` (900 s, pared a derecha e izquierda, recorre de 0,2 a 9,8 m en x y de 0,2 a 7,8 m en y) y en `field` (encuentra la pared recta y la sigue de y = 8,4 a 21,7 m; arrancando al oeste rodea la L).
+  **Toques sin ningún bumper presionado** (flancos de subida a 5 Hz, contacto a menos de 2 cm; entre paréntesis, los toques que sí presionan un bumper):
+  | Mundo (pared, arranque) | Tiempo | Zona muerta de las esquinas | Costados traseros | Escalones |
+  |---|---|---|---|---|
+  | `room`, derecha | 900 s | 2 (704) | 1 | 0 |
+  | `room`, izquierda | 900 s | 0 (704) | 0 | 0 |
+  | `field`, derecha, al este | 1500 s | 7 (1234) | 0 | 0 |
+  | `field`, derecha, al oeste (la L) | 1500 s | 4 (1054) | 0 | 0 |
+  | `field`, izquierda, al este | 1500 s | 2 (1225) | 0 | 0 |
+  | `field`, izquierda, al oeste (la L) | 1500 s | 4 (1052) | 0 | 0 |
+  Son pocos (≈0–1 % de los toques) pero existen: una esquina que roza la pared dentro de la zona muerta no se entera. El perimetral los resuelve con el contacto del bumper lateral o el frontal siguiente y la
+  detección por falta de progreso. El valor depende del tamaño de la zona muerta y del radio, que son los del plano.
 - **Limitación (simulación):** con el cuerpo rígido, en una esquina interior pegado a la pared el robot no puede girar sin que la cola roce; el retroceso en arco
   (`unstick_*`) lo resuelve en el cuarto simulado, pero con paredes reales conviene ajustar `contact_*` y `unstick_*` en el robot.
-- **IMPORTANTE (a medir):** en el URDF los tres sonares miran al frente (`rpy 0`); el ángulo real de montaje del sonar lateral hace falta solo para el refinamiento.
+- **IMPORTANTE (a medir):** el ángulo de los sonares de las esquinas (`corner_sonar_angle_deg`, 30° **provisorio**) es **un solo parámetro compartido** (ver *Ángulo de los sonares de las esquinas*, abajo); hace falta medirlo en el robot.
+
+**Ángulo de los sonares de las esquinas (`corner_sonar_angle_deg`, un solo parámetro).** Hay un sonar al centro del frente y uno en cada esquina delantera; el de las esquinas apunta
+hacia afuera un ángulo respecto del frente (0° = al frente, 90° = de costado; izquierdo `+`, derecho `−`). Vale **30° provisorio** hasta medirlo y vive **solo** en
+`config/robot_geometry.yaml` (`/**: ros__parameters: corner_sonar_angle_deg`). Lo leen `fake_robot` (`sim_world.launch.py`), `potential_field`, `coverage_map` y `perimeter` (`nav.launch.py`;
+en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de los sonares del URDF:
+- `mow_simplified/urdf/mow_simplified.urdf.xacro` es la **fuente** y `mow_simplified.urdf` (el que usan `localization.launch.py`, `display.launch` y `gazebo.launch`) es el **generado**: tras cambiar el ángulo,
+  correr `mow_simplified/scripts/generate_urdf.sh` (hace falta `xacro`: ROS 2 o `pip install xacro`) y commitear los dos. `test_robot_geometry.py` falla si el `.urdf` quedó desfasado del YAML.
+- Se quitaron `side_sonar_yaw_deg` (fake_robot), `sonar_left_yaw_deg` / `sonar_right_yaw_deg` (coverage_map), el yaw del tercer elemento de `sonar_left` / `sonar_right` (potential_field, que ahora son `[x, y]`) y
+  `side_sonar_angle_deg` del YAML de `perimeter`. Antes `coverage_map` usaba 0° (como el URDF) y el resto 45°: ahora todos usan el mismo.
 
 ### Pruebas
 
 1. Sin ROS: `PYTHONPATH=. python3 test/test_sim_world.py`, `test_random_walk.py`, `test_perimeter.py` y `test_gate_sonars.py` (uno por vez). `sim_world.py` es un cuarto simulado
    con paredes y obstáculos circulares, sonares (cono de ±7,5°), bumpers por zona del cuerpo y colisiones.
 
-   **Esquinas redondeadas y bumpers en el simulador** (`fake_robot`, `config/sim_room.yaml`; valores **provisorios**, a ajustar cuando se mida el chasis):
-   | Parámetro | Defecto en el código | En `sim_room.yaml` | Significado |
+   **Huella del chasis, esquinas y bumpers en el simulador** (`fake_robot`, `config/sim_room.yaml` y `sim_field.yaml`; medidas del plano CAD, ver `lawnbot_nav/robot_geometry.py`):
+   | Parámetro | Defecto en el código | En `sim_room.yaml` / `sim_field.yaml` | Significado |
    |---|---|---|---|
-   | `corner_radius` | 0,0 m | 0,05 m | radio de las cuatro esquinas del cuerpo (también en la colisión). **0 = rectángulo**, con las esquinas del lado de los bumpers laterales |
-   | `corner_split_deg` | 45° | 45° | ángulo del punto de contacto en el arco, medido desde la cara frontal/trasera (0°) hacia la lateral (90°): antes del split lo cubre B1/B2/B5, desde el split B3/B4 |
-   | `corner_dead_deg` | 0° | 0° | zona **sin bumper** centrada en el split (con 20° y split 45°: de 35° a 55° no hay bumper). Con 0 el punto exacto del split es del lateral |
+   | `body_shape` | `rectangle` | `chassis` | `chassis` = la huella real: **bloque delantero de 400 mm de ancho × 226 mm de profundidad** y **bloque trasero de 250 mm de ancho** (largo total 436 mm; `body_length`, `body_front_depth`, `body_front_width`, `body_rear_width`). `rectangle` = el cuerpo rectangular de antes (para los tests viejos) |
+   | `corner_radius` | 0,0 m | 0,06 m | radio de las **esquinas delanteras** (en `chassis`; en `rectangle`, de las cuatro). También en la colisión. Las traseras son rectas |
+   | `corner_split_deg` | 45° | 41° | ángulo en el arco, medido desde la cara frontal (0°) hacia la lateral (90°), donde se parte entre el bumper frontal y el lateral |
+   | `corner_dead_deg` | 0° | 55° | zona **sin bumper** centrada en el split: de 13,5° a 68,5° no hay bumper (B1/B2 entran en el arco hasta ~13°; B3/B4 empiezan a ~38 mm del frente, ~68° del arco) |
+
+   **Bumpers del chasis:** B1/B2 cubren el frente recto y el arco hasta ~13°; B3/B4 el costado del bloque delantero (desde ~68° del arco hasta el escalón donde empieza el bloque trasero); B5 la cara trasera, centrada. **Sin bumper**: la zona muerta de cada esquina delantera, los costados del bloque trasero y los escalones. `SimWorld.unprotected_contacts(pose)` informa cuál de esas tres zonas toca una pared a menos de 2 cm; `test_perimeter.py` los cuenta (`log['unprotected']`). Supuestos del plano que **no** venían en la cota: el largo de B3/B4 hacia atrás (se toma hasta el escalón) y que B5 cubre toda la cara trasera. El frente queda en x = 0,2137 m de `base_footprint` y la trasera en −0,2223 m (el joint del bumper trasero del URDF sigue en −0,2463: viene de la exportación de SolidWorks y no se tocó).
 
    Un bumper se presiona con un punto de su zona a ≤ 2 cm de una pared, así que una pared pegada a un costado también toca la parte del arco más cercana a ella: con radio 0,15 m
    y split 45° solo el lateral; si el split es 80° se presiona además B2 o B5. `perimeter` da la vuelta completa de `sim_room` con radio 0,05 y 0,10 m y zona muerta de 0° y 20°
@@ -445,7 +470,7 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    | `room` | `config/sim_room.yaml` | cuarto de 10 × 8 m con un bloque y un obstáculo circular | (2, 1) |
    | `field` | `config/sim_field.yaml` | campo abierto de 30 × 30 m con 3 obstáculos chicos (radios 0,25–0,4 m), un borde exterior lejano a 5 m (de −5 a 35 en x e y) para que el robot no se escape y dos barreras para probar `auto_perimeter`: una **pared recta de 12 m** en x = 19 (de y = 9 a 21, 4 m al este del arranque) y una **barrera en L de 3 × 3 m** con la esquina en (9, 13) y brazos hasta (9, 16) y (12, 13). Desde el arranque (mirando al este) el perimetral encuentra la pared recta; para la L arrancar `fake_robot` en (15, 15) con `yaw: 3.14159` (mira al oeste) | (15, 15), el centro |
 
-   Un `world` desconocido hace fallar el launch con un mensaje claro. Los dos usan las mismas esquinas redondeadas de arriba.
+   Un `world` desconocido hace fallar el launch con un mensaje claro. Los dos usan la misma huella del chasis y las mismas esquinas de arriba.
 
    **Probar la app con un cerco dibujado a escala real.** Dibujá el cerco en la app (queda en `~/.ros/lawnbot_geofence.json`, en lat/lon) y alinealo con el mundo con
    `tools/datum_from_fence.py`, que calcula `datum_lat`/`datum_lng` para que el centro del cerco (el centroide del polígono) caiga en el centro del mundo (centro de la caja de las paredes):
@@ -498,7 +523,7 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    ros2 topic hz /cmd_vel_random ; ros2 topic echo /cmd_vel
    ```
    Para `auto_random` hace falta `/geofence/status` `OK` (un cerco en `map`, ver Bloque A); sin él el robot no se mueve y `/nav/safety_alert` marca
-   `geofence_not_ready`. Para `auto_perimeter`, `'auto_perimeter'` (en `sim_room.yaml` los sonares laterales están a ±45°). Cambiar de modo apaga
+   `geofence_not_ready`. Para `auto_perimeter`, `'auto_perimeter'` (los sonares de las esquinas están a ±`corner_sonar_angle_deg`, 30°). Cambiar de modo apaga
    el nodo anterior con ceros. **No correr `ekf_local` ni la odometría real a la vez que `fake_robot`.**
 4. **Resultado en simulación** (cuarto de 10 m × 8 m con un bloque y un obstáculo): `random_walk` recorre ~20 celdas de 1 m en 5 min sin tocar nada
    y sin salir del cerco; `perimeter` (modo bumper) da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque, y con la pared fuera de alcance
@@ -634,7 +659,7 @@ Nodo `potential_field` (`config/potential_field.yaml`, arranca con `nav.launch.p
   Si el nodo se cae, el mux vuelve solo al algoritmo a los 0,5 s. Al desactivarse, salir del modo o apagarse publica ceros.
 - **Reglas:** nunca crea movimiento (orden nominal 0 → 0), nunca supera la velocidad lineal nominal, no retrocede por su cuenta, y el giro agregado se limita a `max_turn` (0,6 rad/s). Obstáculo justo de frente: desempata girando hacia `tie_turn`.
   Sin lecturas vigentes de los tres sonares no publica (el gate frena al algoritmo por sensor viejo).
-- **Entradas:** los tres sonares (montaje `sonar_*` en el YAML; **el yaw lateral de 45° es provisorio**, igual que en `perimeter` y `fake_robot`) y, **solo con `use_vision: true`**, `/vision/obstacles` (`PoseArray` en `base_footprint`; en otro frame se ignora con aviso).
+- **Entradas:** los tres sonares (montaje `sonar_*` en el YAML; **el yaw de los sonares de las esquinas es `corner_sonar_angle_deg` (30°, provisorio), el mismo parámetro que lee `perimeter`, `coverage_map`, `fake_robot` y el URDF**) y, **solo con `use_vision: true`**, `/vision/obstacles` (`PoseArray` en `base_footprint`; en otro frame se ignora con aviso).
   `vision_stub` ya publica ese topic vacío, así que el contrato existe aunque no haya cámara. Lecturas sin eco (>= `sonar_max_range` − 0,05) no son obstáculo.
 - **Mínimo local:** con obstáculos dentro de `influence_distance` y orden de avanzar, si el robot no se mueve `stall_min_progress` (0,20 m) en `stall_window_s` (6 s) avisa **`potential_field:local_minimum`** por `/nav/alert_in`
   (llega a la app en `alert`) y **cede el control** `yield_s` (4 s) para que el algoritmo de abajo (p. ej. el retroceso de `random_walk`) resuelva. El progreso se mide con la TF `odom` -> `base_footprint`; sin ella no se detecta y se avisa en el log.

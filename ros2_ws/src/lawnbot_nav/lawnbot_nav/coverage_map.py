@@ -25,7 +25,7 @@ from tf2_ros import Buffer, TransformListener
 from lawnbot_nav.coverage_map_logic import CoverageGrid
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.sensor_cache import SONARS, SensorCache
-from lawnbot_nav.sim_world import SONAR_MOUNTS
+from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG, SONAR_MOUNTS, sonar_yaws
 from lawnbot_nav.tf_utils import lookup_pose
 
 LATCHED = QoSProfile(
@@ -46,8 +46,7 @@ class CoverageMap(Node):
         d('count_only_when_cutting', True)
         d('cutting_timeout', 0.5)              # s: /cutter/cmd mas viejo que esto = no esta cortando
         d('sonar_max_range', 1.5)
-        d('sonar_left_yaw_deg', 0.0)           # angulo de montaje de los sonares (el URDF los pone al frente)
-        d('sonar_right_yaw_deg', 0.0)
+        d('corner_sonar_angle_deg', CORNER_SONAR_ANGLE_DEG)   # yaw de los sonares de las esquinas (config/robot_geometry.yaml)
         d('use_sonars', True)
         d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('frame_id', 'map')
@@ -70,7 +69,7 @@ class CoverageMap(Node):
         self.count_only_cutting = gp('count_only_when_cutting').value
         self.cutting_timeout = gp('cutting_timeout').value
         self.max_range = gp('sonar_max_range').value
-        self.yaw = {'left': gp('sonar_left_yaw_deg').value, 'center': 0.0, 'right': gp('sonar_right_yaw_deg').value}
+        self.yaw = sonar_yaws(gp('corner_sonar_angle_deg').value)
         self.use_sonars = gp('use_sonars').value
         self.frame_id = gp('frame_id').value
         self.base_frame = gp('base_frame').value

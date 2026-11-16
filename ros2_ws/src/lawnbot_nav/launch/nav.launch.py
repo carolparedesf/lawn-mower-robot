@@ -77,16 +77,16 @@ def generate_launch_description():
              output='screen', parameters=[cfg('random_walk.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='perimeter', name='perimeter',
-             output='screen', parameters=[cfg('perimeter.yaml'), sonar_prefix, use_sim_time]),
+             output='screen', parameters=[cfg('perimeter.yaml'), cfg('robot_geometry.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='coverage_map', name='coverage_map',
-             output='screen', parameters=[cfg('coverage_map.yaml'), sonar_prefix, use_sim_time]),
+             output='screen', parameters=[cfg('coverage_map.yaml'), cfg('robot_geometry.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='blade_controller', name='blade_controller',
              output='screen', parameters=[cfg('blade_controller.yaml'), use_sim_time]),
 
         Node(package='lawnbot_nav', executable='potential_field', name='potential_field',
-             output='screen', parameters=[cfg('potential_field.yaml'), sonar_prefix, use_sim_time]),
+             output='screen', parameters=[cfg('potential_field.yaml'), cfg('robot_geometry.yaml'), sonar_prefix, use_sim_time]),
 
         Node(package='lawnbot_nav', executable='robot_events', name='robot_events',
              output='screen', parameters=[cfg('robot_events.yaml'), use_sim_time]),
