@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
-import '../widgets/dpad_widget.dart';
 import '../widgets/joystick_widget.dart';
 import '../widgets/robo_bottom_nav.dart';
 import '../widgets/robo_top_bar.dart';
@@ -42,14 +41,6 @@ class ControlScreen extends StatefulWidget {
 class _ControlScreenState extends State<ControlScreen> {
   final MapController _mapController = MapController();
   bool _followRobot = true;
-  bool _useDpad = false;
-
-  void _selectStick(bool useDpad) {
-    setState(() => _useDpad = useDpad);
-    // Entering manual control must explicitly request manual mode: the
-    // robot only honors robot/cmd/move while mode == "manual".
-    context.read<ConnectionProvider>().setMode('manual');
-  }
 
   void _toggleAutonomous(bool isAutonomous) {
     final connection = context.read<ConnectionProvider>();
@@ -216,43 +207,9 @@ class _ControlScreenState extends State<ControlScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x0D000000),
-                        blurRadius: 8,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _SegButton(
-                        label: 'Joystick',
-                        active: !_useDpad,
-                        onTap: () => _selectStick(false),
-                      ),
-                      _SegButton(
-                        label: 'Flechas',
-                        active: _useDpad,
-                        onTap: () => _selectStick(true),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
+                const SizedBox(
                   height: 156,
-                  child: Center(
-                    child: _useDpad
-                        ? const DpadWidget()
-                        : const JoystickWidget(),
-                  ),
+                  child: Center(child: JoystickWidget()),
                 ),
               ],
             ),
@@ -277,46 +234,11 @@ class _ControlScreenState extends State<ControlScreen> {
               ),
               child: Text(isAutonomous
                   ? '⏸ Detener modo autónomo'
-                  : '▶ Iniciar modo autónomo'),
+                  : 'Iniciar modo autónomo'),
             ),
           ),
         ),
       ],
-    );
-  }
-}
-
-class _SegButton extends StatelessWidget {
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-
-  const _SegButton({
-    required this.label,
-    required this.active,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: active ? RoboColors.primaryGreen : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: active ? Colors.white : RoboColors.textSecondary,
-          ),
-        ),
-      ),
     );
   }
 }
