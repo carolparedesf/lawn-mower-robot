@@ -1,18 +1,25 @@
 import math
 import unittest
 
+from lawnbot_nav.geofence_logic import polygon_centroid, signed_distance
 from lawnbot_nav.perimeter_logic import (CONTACT_BACK, CONTACT_FWD, CONTACT_TURN, CORNER, CORNER_BACK, FAILED, FOLLOW, SEARCH_ARC,
-                                         SEARCH_FORWARD, UNSTICK, PerimeterCore, PerimeterInputs, PerimeterParams)
+                                         SEARCH_FORWARD, SEARCH_TURN, UNSTICK, PerimeterCore, PerimeterInputs,
+                                         PerimeterParams)
 from lawnbot_nav.sim_robot import SimRobot
 from lawnbot_nav.sim_world import SimWorld
+
+def wrap(a):
+    return math.atan2(math.sin(a), math.cos(a))
+
 
 DT = 0.05
 SENSOR_DT = 0.2        # el firmware publica sonares y bumpers a 5 Hz
 
 
-def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use_pose=False):
+def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use_pose=False, fence=None, seed=1):
     """Lazo cerrado con el mundo simulado. Los sonares laterales miran a +-side_sonar_angle_deg."""
-    core = PerimeterCore(params)
+    core = PerimeterCore(params, seed)
+    centroid = polygon_centroid(fence) if fence else None
     robot = SimRobot(*start, tau=tau)
     yaw = params.side_sonar_angle_deg if side_sonar_yaw is None else side_sonar_yaw
     offsets = {'left': yaw, 'center': 0.0, 'right': -yaw}
@@ -21,7 +28,7 @@ def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use
     t, next_sensor = 0.0, 0.0
     ranges, bumpers = {}, {}
     log = {'xy': [], 'states': [], 'collisions': 0, 'lateral': [], 'v': [], 'w': [], 'alerts': set(),
-           'failed_at': None, 'contacts': 0}
+           'failed_at': None, 'contacts': 0, 'edge_min': math.inf}
     while t < tmax and core.state != FAILED:
         if t >= next_sensor:
             pose = (robot.x, robot.y, robot.yaw)
@@ -36,6 +43,10 @@ def simulate(world, params, start, tmax=300.0, tau=0.1, side_sonar_yaw=None, use
             front_bumper=bumpers['bumper/B1_front_left'] or bumpers['bumper/B2_front_right'],
             back_bumper=bumpers['bumper/B5_back'],
             pose=(robot.x, robot.y) if use_pose else None)
+        if fence:
+            inp.edge_distance = signed_distance((robot.x, robot.y), fence)
+            inp.interior_angle = wrap(math.atan2(centroid[1] - robot.y, centroid[0] - robot.x) - robot.yaw)
+            log['edge_min'] = min(log['edge_min'], inp.edge_distance)
         v, w = core.update(inp, t)
         log['collisions'] += world.step_robot(robot, v, w, DT)
         log['xy'].append((robot.x, robot.y))
@@ -116,7 +127,7 @@ class BumperModeTests(unittest.TestCase):
 
     def test_rodea_un_bloque_por_contacto(self):
         world = SimWorld(walls=SimWorld.box(4.0, 3.0, 7.0, 5.0))
-        core, robot, log = simulate(world, PerimeterParams(side='right'), start=(3.0, 3.5, math.pi / 2), tmax=900.0)
+        core, robot, log = simulate(world, PerimeterParams(side='right'), start=(2.0, 4.0, 0.0), tmax=900.0)
         self.assertNotEqual(core.state, FAILED, core.fail_reason)
         xy = log['xy']
         self.assertTrue(any(y > 5.1 for x, y in xy) and any(x > 7.1 for x, y in xy)
@@ -210,17 +221,57 @@ class BumperModeTests(unittest.TestCase):
                 t += 0.05
             self.assertEqual(out, (-0.1, expected))
 
-    def test_pared_perdida_busca_de_forma_acotada_y_avisa(self):
+    def test_sin_pared_a_la_vista_avanza_recto_y_se_rinde_a_los_search_timeout_s(self):
         world = SimWorld()                                       # campo abierto: nunca encuentra pared
-        params = PerimeterParams(side='right', search_timeout_s=12.0)
+        params = PerimeterParams(side='right', search_timeout_s=30.0, search_speed=0.2)
         core, robot, log = simulate(world, params, start=(0.0, 0.0, 0.0), tmax=60.0)
         self.assertEqual((core.state, core.fail_reason), (FAILED, 'perimeter_lost'))
         self.assertIn('perimeter_lost', log['alerts'])
-        self.assertAlmostEqual(log['failed_at'], 12.0, delta=0.3)
+        self.assertAlmostEqual(log['failed_at'], 30.0, delta=0.3)
         self.assertEqual((log['v'][-1], log['w'][-1]), (0.0, 0.0))
-        self.assertIn(SEARCH_FORWARD, log['states'])
-        self.assertIn(SEARCH_ARC, log['states'])
-        self.assertTrue(all(w <= 1e-9 for w in log['w']))        # pared a la derecha: nunca gira a la izquierda
+        self.assertEqual(set(log['states'][:-1]), {SEARCH_FORWARD})
+        moving = log['v'][:-1]
+        self.assertTrue(all(abs(v - 0.2) < 1e-9 for v in moving))   # velocidad de busqueda
+        self.assertTrue(all(w == 0.0 for w in log['w']))            # sin giros: no hace circulos
+        self.assertGreater(robot.x, 5.5)                            # ~0,2 m/s durante 30 s
+        self.assertAlmostEqual(robot.y, 0.0, delta=1e-6)
+
+    def test_el_tiempo_de_busqueda_por_defecto_es_120_s(self):
+        self.assertEqual(PerimeterParams().search_timeout_s, 120.0)
+        core = PerimeterCore(PerimeterParams())
+        free = PerimeterInputs(sensors_ok=True, center_range=1.5)
+        self.assertEqual(core.update(free, 0.0), (0.15, 0.0))
+        self.assertEqual(core.update(free, 119.0), (0.15, 0.0))
+        self.assertEqual(core.update(free, 121.0), (0.0, 0.0))
+        self.assertEqual((core.state, core.alert), (FAILED, 'perimeter_lost'))
+
+    def test_la_busqueda_recta_termina_al_primer_contacto_o_sonar(self):
+        for inp, kind in ((PerimeterInputs(sensors_ok=True, center_range=0.3), 'sonar'),
+                          (PerimeterInputs(sensors_ok=True, side_bumper=True, center_range=1.5), 'contacto')):
+            core = PerimeterCore(PerimeterParams())
+            core.update(PerimeterInputs(sensors_ok=True, center_range=1.5), 0.0)
+            core.update(inp, 50.0)
+            self.assertNotEqual(core.state, SEARCH_FORWARD, kind)
+            self.assertIsNone(core.alert, kind)
+
+    def test_pared_perdida_ya_encontrada_busca_con_arcos_y_avisa(self):
+        """Un borde ya hallado que se pierde sigue con la busqueda acotada de siempre (lost_search_timeout_s)."""
+        params = PerimeterParams(side='right', search_timeout_s=120.0, lost_search_timeout_s=12.0,
+                                 bump_lost_timeout_s=3.0)
+        core = PerimeterCore(params)
+        free = PerimeterInputs(sensors_ok=True, center_range=1.5)
+        core.update(free, 0.0)
+        core.update(PerimeterInputs(sensors_ok=True, side_bumper=True, center_range=1.5), 1.0)   # halla la pared
+        self.assertEqual(core.state, CONTACT_BACK)
+        t, states, alert_at = 1.05, set(), None
+        while t < 60.0 and core.state != FAILED:
+            core.update(free, t)
+            states.add(core.state)
+            t += 0.05
+        self.assertEqual((core.state, core.fail_reason), (FAILED, 'perimeter_lost'))
+        self.assertIn(SEARCH_ARC, states)
+        self.assertIn(SEARCH_FORWARD, states)
+        self.assertLess(t, 40.0)                                  # mucho antes de los 120 s de la busqueda inicial
 
     def test_callejon_ciego_falla_por_bloqueo(self):
         world = SimWorld(walls=SimWorld.box(0.0, 0.0, 0.5, 4.0))
@@ -482,6 +533,157 @@ class EsquinasTests(unittest.TestCase):
             t, kind = self._ciclo(core, t, avance=0.12)
             self.assertEqual(kind, 'side')
             core.state = FOLLOW
+
+
+class EdgeSearchTests(unittest.TestCase):
+    """Busqueda inicial: recto; cerca del borde del cerco y mirando hacia afuera, gira hacia adentro y sigue buscando."""
+
+    def inputs(self, edge=None, angle=None, **kw):
+        return PerimeterInputs(sensors_ok=True, center_range=1.5, edge_distance=edge, interior_angle=angle, **kw)
+
+    def test_mirando_hacia_afuera_cerca_del_borde_gira_hacia_el_interior(self):
+        core = PerimeterCore(PerimeterParams(search_edge_spread_deg=0.0), seed=1)
+        core.update(self.inputs(), 0.0)
+        v, w = core.update(self.inputs(edge=0.8, angle=math.pi / 2 + 0.5), 0.1)    # el centroide esta a la izquierda
+        self.assertEqual((core.state, v), (SEARCH_TURN, 0.0))
+        self.assertAlmostEqual(w, 0.5)
+        v, w = core.update(self.inputs(edge=0.8, angle=-math.pi / 2 - 0.5), 100.0)  # (giro terminado) ahora a la derecha
+        self.assertEqual(core.state, SEARCH_TURN)
+
+    def test_el_giro_dura_lo_que_pide_el_angulo_y_despues_sigue_recto(self):
+        core = PerimeterCore(PerimeterParams(search_edge_spread_deg=0.0, search_turn_speed=0.5), seed=1)
+        core.update(self.inputs(), 0.0)
+        core.update(self.inputs(edge=0.5, angle=math.pi), 1.0)                    # 180 grados a 0,5 rad/s = ~6,3 s
+        self.assertEqual(core.state, SEARCH_TURN)
+        _, w = core.update(self.inputs(edge=0.5, angle=math.pi), 6.0)
+        self.assertEqual(w, 0.5)
+        v, w = core.update(self.inputs(edge=1.2, angle=0.0), 7.5)
+        self.assertEqual((core.state, v, w), (SEARCH_FORWARD, 0.15, 0.0))
+        self.assertEqual(core.search_edge_turns, 1)
+
+    def test_mirando_hacia_adentro_o_lejos_del_borde_no_gira(self):
+        for edge, angle in ((0.8, 0.3), (0.8, -1.0), (2.0, math.pi), (1.0, math.pi)):
+            core = PerimeterCore(PerimeterParams(), seed=1)
+            v, w = core.update(self.inputs(edge=edge, angle=angle), 0.0)
+            self.assertEqual((core.state, v, w), (SEARCH_FORWARD, 0.15, 0.0), (edge, angle))
+
+    def test_sin_cerco_nunca_gira(self):
+        core = PerimeterCore(PerimeterParams(), seed=1)
+        self.assertEqual(core.update(self.inputs(edge=None, angle=None), 0.0), (0.15, 0.0))
+
+    def test_fuera_del_cerco_o_sin_rumbo_al_interior_gira_igual(self):
+        core = PerimeterCore(PerimeterParams(), seed=1)
+        core.update(self.inputs(edge=-0.3, angle=0.1), 0.0)
+        self.assertEqual(core.state, SEARCH_TURN)
+        core = PerimeterCore(PerimeterParams(), seed=1)
+        core.update(self.inputs(edge=0.4, angle=None), 0.0)
+        self.assertEqual(core.state, SEARCH_TURN)
+
+    def test_girar_hacia_adentro_no_reinicia_el_plazo_de_busqueda(self):
+        core = PerimeterCore(PerimeterParams(search_timeout_s=20.0), seed=1)
+        t = 0.0
+        while t < 40.0 and core.state != FAILED:
+            core.update(self.inputs(edge=0.4, angle=math.pi), t)
+            t += 0.5
+        self.assertEqual((core.state, core.fail_reason), (FAILED, 'perimeter_lost'))
+        self.assertAlmostEqual(t, 21.0, delta=1.0)
+
+    def test_un_contacto_mientras_gira_cuenta_como_borde_encontrado(self):
+        core = PerimeterCore(PerimeterParams(), seed=1)
+        core.update(self.inputs(edge=0.4, angle=math.pi), 0.0)
+        self.assertEqual(core.state, SEARCH_TURN)
+        core.update(self.inputs(edge=0.4, angle=math.pi, side_bumper=True), 1.0)
+        self.assertEqual(core.state, CONTACT_BACK)
+
+    def test_el_cerco_cerrado_mantiene_al_robot_dentro_y_encuentra_la_pared(self):
+        fence = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)]
+        world = SimWorld(walls=[((15.0, 2.0), (15.0, 18.0))])
+        for seed in (1, 2, 3):
+            core, robot, log = simulate(world, PerimeterParams(side='right'), start=(3.0, 10.0, math.pi),
+                                        tmax=400.0, fence=fence, seed=seed)
+            self.assertNotEqual(core.state, FAILED, f'seed {seed}: {core.fail_reason}')
+            self.assertGreater(log['edge_min'], 0.0, f'seed {seed}: salio del cerco')
+            self.assertIn(SEARCH_TURN, log['states'], f'seed {seed}: no giro en el borde')
+            self.assertGreater(log['contacts'], 3, f'seed {seed}: no llego a la pared')
+            self.assertTrue(any(x > 13.0 for x, y in log['xy']), f'seed {seed}')
+
+    def test_sin_pared_en_un_cerco_chico_recorre_dentro_hasta_rendirse(self):
+        fence = [(0.0, 0.0), (12.0, 0.0), (12.0, 12.0), (0.0, 12.0)]
+        core, robot, log = simulate(SimWorld(), PerimeterParams(side='right', search_timeout_s=150.0),
+                                    start=(6.0, 6.0, 0.0), tmax=200.0, fence=fence)
+        self.assertEqual((core.state, core.fail_reason), (FAILED, 'perimeter_lost'))
+        self.assertAlmostEqual(log['failed_at'], 150.0, delta=0.5)
+        self.assertGreater(log['edge_min'], 0.0)
+        self.assertGreaterEqual(core.search_edge_turns, 2)
+
+
+def sim_field_world(cls=SimWorld):
+    """El campo de config/sim_field.yaml (paredes, barreras y obstaculos tal cual estan en el YAML)."""
+    import os
+    import yaml
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'sim_field.yaml')
+    with open(path) as f:
+        cfg = yaml.safe_load(f)['fake_robot']['ros__parameters']
+    w, o = cfg['walls'], cfg['obstacles']
+    walls = [((w[i], w[i + 1]), (w[i + 2], w[i + 3])) for i in range(0, len(w), 4)]
+    circles = [tuple(o[i:i + 3]) for i in range(0, len(o), 3)]
+    return cls(walls=walls, circles=circles, corner_radius=cfg['corner_radius'],
+               corner_split_deg=cfg['corner_split_deg'], corner_dead_deg=cfg['corner_dead_deg']), cfg
+
+
+class FieldWorldTests(unittest.TestCase):
+    """world:=field: pared recta de 12 m al este del arranque y barrera en L de 3 x 3 m al oeste."""
+
+    def test_el_yaml_trae_la_pared_recta_la_l_y_los_obstaculos_de_antes(self):
+        world, cfg = sim_field_world()
+        segments = {tuple(sorted(s)) for s in world.walls}
+        self.assertIn(((19.0, 9.0), (19.0, 21.0)), segments)                       # recta de 12 m, 4 m al este
+        self.assertIn(((9.0, 13.0), (9.0, 16.0)), segments)                        # brazos de la L, 3 m cada uno
+        self.assertIn(((9.0, 13.0), (12.0, 13.0)), segments)
+        self.assertEqual(len(world.walls), 4 + 3)
+        self.assertEqual(world.circles, [(11.0, 19.0, 0.3), (20.0, 11.0, 0.25), (19.0, 21.0, 0.4)])
+        self.assertEqual((cfg['x'], cfg['y'], cfg['yaw']), (15.0, 15.0, 0.0))
+
+    def test_desde_el_arranque_encuentra_la_pared_recta_y_la_sigue(self):
+        world, cfg = sim_field_world()
+        core, robot, log = simulate(world, PerimeterParams(side='right'), start=(cfg['x'], cfg['y'], cfg['yaw']),
+                                    tmax=400.0, use_pose=True)
+        self.assertNotEqual(core.state, FAILED, core.fail_reason)
+        xy = log['xy']
+        first = next(i for i, c in enumerate(log['states']) if c not in (SEARCH_FORWARD,))
+        self.assertAlmostEqual(xy[first][0], 19.0 - 0.45, delta=0.6)                # primer contacto en la pared
+        self.assertTrue(all(w == 0.0 for w in log['w'][:first]))                    # hasta ahi, recto
+        self.assertTrue(any(y > 20.0 for x, y in xy), 'no siguio la pared hasta el extremo norte')
+        self.assertTrue(all(x > 17.0 for x, y in xy[first:first + 200] if y > 9.5), 'se aparto de la pared')
+        self.assertGreater(log['contacts'], 10)
+
+    def test_con_la_pared_a_la_izquierda_tambien_la_encuentra(self):
+        world, cfg = sim_field_world()
+        core, robot, log = simulate(world, PerimeterParams(side='left'), start=(cfg['x'], cfg['y'], cfg['yaw']),
+                                    tmax=400.0, use_pose=True)
+        self.assertNotEqual(core.state, FAILED, core.fail_reason)
+        self.assertTrue(any(y < 10.0 for x, y in log['xy']), 'no siguio la pared hacia el sur')
+
+    def test_rodea_la_l(self):
+        world, cfg = sim_field_world()
+        core, robot, log = simulate(world, PerimeterParams(side='right'), start=(15.0, 15.0, math.pi),
+                                    tmax=1500.0, use_pose=True)
+        self.assertNotEqual(core.state, FAILED, core.fail_reason)
+        xy = log['xy']
+        # rodea las dos puntas y pasa por el lado de afuera de los dos brazos
+        self.assertTrue(any(y > 16.3 for x, y in xy), 'no rodeo la punta del brazo vertical')
+        self.assertTrue(any(x < 8.7 and 13.5 < y < 15.5 for x, y in xy), 'no paso por el lado de afuera del brazo vertical')
+        self.assertTrue(any(x > 12.3 for x, y in xy if 12.0 < y < 13.6), 'no rodeo la punta del brazo horizontal')
+        self.assertTrue(any(y < 12.7 and 9.5 < x < 11.5 for x, y in xy), 'no paso por debajo del brazo horizontal')
+
+    def test_con_el_cerco_del_campo_no_sale_y_lo_encuentra(self):
+        world, cfg = sim_field_world()
+        fence = [(1.0, 1.0), (29.0, 1.0), (29.0, 29.0), (1.0, 29.0)]
+        core, robot, log = simulate(world, PerimeterParams(side='right'), start=(cfg['x'], cfg['y'], cfg['yaw']),
+                                    tmax=300.0, use_pose=True, fence=fence)
+        self.assertNotEqual(core.state, FAILED, core.fail_reason)
+        self.assertGreater(log['edge_min'], 0.0)
+        self.assertGreater(log['contacts'], 10)
 
 
 if __name__ == '__main__':
