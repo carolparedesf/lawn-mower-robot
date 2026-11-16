@@ -20,6 +20,14 @@ class GeofenceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replaces the whole polygon (used by the rectangle-by-measures flow).
+  void setPoints(List<LatLng> points) {
+    _points
+      ..clear()
+      ..addAll(points);
+    notifyListeners();
+  }
+
   void undo() {
     if (_points.isEmpty) return;
     _points.removeLast();

@@ -20,6 +20,10 @@ class RobotPosition {
     );
   }
 
+  /// Whether this fix arrived at most [maxAge] before [now].
+  bool isFresh(DateTime now, {Duration maxAge = const Duration(seconds: 3)}) =>
+      now.difference(timestamp) <= maxAge;
+
   Map<String, dynamic> toJson() => {
         'lat': lat,
         'lng': lng,
