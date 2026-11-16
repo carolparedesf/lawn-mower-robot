@@ -442,6 +442,8 @@ hacia afuera un ángulo respecto del frente (0° = al frente, 90° = de costado;
 en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de los sonares del URDF:
 - `mow_simplified/urdf/mow_simplified.urdf.xacro` es la **fuente** y `mow_simplified.urdf` (el que usan `localization.launch.py`, `display.launch` y `gazebo.launch`) es el **generado**: tras cambiar el ángulo,
   correr `mow_simplified/scripts/generate_urdf.sh` (hace falta `xacro`: ROS 2 o `pip install xacro`) y commitear los dos. `test_robot_geometry.py` falla si el `.urdf` quedó desfasado del YAML.
+- **Ruedas motrices:** `wheel_separation` (0,355 m entre centros, igual que `base_width` del firmware) está en el mismo YAML; el xacro pone las ruedas en y = ±`wheel_separation`/2 (±0,1775 m; antes
+  ±0,18 m del export de SolidWorks). El simulador usa `base_width` 0,355 (`fake_robot` / `sim_robot`); `sim_world` no modela la colisión de las ruedas (el cuerpo es la huella del chasis).
 - Se quitaron `side_sonar_yaw_deg` (fake_robot), `sonar_left_yaw_deg` / `sonar_right_yaw_deg` (coverage_map), el yaw del tercer elemento de `sonar_left` / `sonar_right` (potential_field, que ahora son `[x, y]`) y
   `side_sonar_angle_deg` del YAML de `perimeter`. Antes `coverage_map` usaba 0° (como el URDF) y el resto 45°: ahora todos usan el mismo.
 

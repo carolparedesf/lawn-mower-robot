@@ -8,11 +8,13 @@
 
   <!-- FUENTE de mow_simplified.urdf (generado: no editar el .urdf a mano). Regenerar con scripts/generate_urdf.sh.
        El angulo de los sonares de las esquinas sale del MISMO archivo de parametros que leen fake_robot, potential_field,
-       coverage_map y perimeter: ros2_ws/src/lawnbot_nav/config/robot_geometry.yaml (corner_sonar_angle_deg).
+       coverage_map y perimeter: ros2_ws/src/lawnbot_nav/config/robot_geometry.yaml (corner_sonar_angle_deg). Las ruedas motrices salen de
+       wheel_separation (0,355 m entre centros) de ese mismo archivo: y = +-wheel_separation/2.
        Positivo hacia afuera: sonar izquierdo +angulo, derecho -angulo (yaw respecto del frente). -->
   <xacro:arg name="geometry_file" default="ros2_ws/src/lawnbot_nav/config/robot_geometry.yaml"/>
   <xacro:property name="geometry" value="${xacro.load_yaml('$(arg geometry_file)')}"/>
   <xacro:property name="corner_sonar_angle_deg" value="${geometry['/**']['ros__parameters']['corner_sonar_angle_deg']}"/>
+  <xacro:property name="wheel_half_separation" value="${geometry['/**']['ros__parameters']['wheel_separation'] / 2.0}"/>
   <xacro:property name="corner_sonar_yaw" value="${radians(corner_sonar_angle_deg)}"/>
 
   <link name="base_footprint"/>
@@ -223,7 +225,7 @@
 
   <joint name="base_BLwheel_joint" type="continuous">
     <origin
-      xyz="-0.12132 0.17932 0.031"
+      xyz="-0.12132 ${wheel_half_separation} 0.031"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -275,7 +277,7 @@
 
   <joint name="base_BRwheel_joint" type="continuous">
     <origin
-      xyz="-0.12132 -0.18068 0.031"
+      xyz="-0.12132 ${-wheel_half_separation} 0.031"
       rpy="0 0 0" />
     <parent
       link="base_link" />
