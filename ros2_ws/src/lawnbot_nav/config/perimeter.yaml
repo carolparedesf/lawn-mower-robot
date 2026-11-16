@@ -54,9 +54,20 @@ perimeter:
     sonar_forward_offset: 0.19
     outer_corner_extra: 0.10
 
-    # ── Busqueda acotada al perder el borde ──
+    # ── Busqueda inicial del borde: recto hasta el primer contacto o deteccion del sonar ──
+    search_speed: 0.15             # m/s
+    search_timeout_s: 120.0        # tiempo total antes de rendirse (perimeter_lost)
+    search_edge_margin: 1.0        # m: a menos del borde del cerco y mirando hacia afuera, gira hacia adentro y sigue buscando
+    search_turn_speed: 0.5         # rad/s
+    search_edge_spread_deg: 30.0   # variacion al azar del giro hacia el centroide
+    search_edge_turn_min_deg: 120.0   # sin cerco/pose: giro al azar entre estos angulos
+    search_edge_turn_max_deg: 180.0
+    seed: -1                       # -1: al azar
+    geofence_frame_id: map         # frame del cerco (geofence/polygon)
+
+    # ── Busqueda acotada al perder un borde ya encontrado ──
     search_arc_time_s: 4.0
     search_arc_linear: 0.1
     search_arc_turn: 0.4
     search_forward_time_s: 3.0
-    search_timeout_s: 25.0         # tiempo total antes de rendirse (perimeter_lost)
+    lost_search_timeout_s: 25.0    # tiempo total antes de rendirse (perimeter_lost)

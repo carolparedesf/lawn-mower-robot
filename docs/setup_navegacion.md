@@ -384,6 +384,12 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
 Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumper lateral** (B4 / B3). El sonar lateral es un refinamiento opcional.
 
 **Modo base (bumper, `use_side_sonar: false`):**
+0. **Búsqueda inicial del borde** (al activarse el modo, sin pared a la vista): avanza **recto** a `search_speed` (0,15 m/s) hasta el **primer contacto** de un bumper o la **detección del
+   sonar central** (`obstacle_distance`; el sonar lateral también cuenta si está habilitado). No gira en círculos. Si se acerca al **borde del cerco virtual** (a menos de `search_edge_margin`, 1 m)
+   mirando hacia afuera, gira en el lugar **hacia el interior** (hacia el centroide del cerco ± `search_edge_spread_deg`, como `random_walk`; sin centroide o pose, un giro al azar entre
+   `search_edge_turn_min_deg` y `search_edge_turn_max_deg`) y sigue buscando; fuera del cerco también gira hacia adentro. Sin cerco (`/geofence/distance_to_edge` sin dato) no maniobra en ningún borde.
+   Solo se rinde pasados **`search_timeout_s` (120 s por defecto)** desde que se activó, con la alerta `perimeter_lost`; los giros hacia el interior no reinician ese plazo.
+   Una vez hallada la pared, sigue con los pasos de abajo. `seed` (−1 = al azar) fija los giros al azar para reproducir una corrida.
 1. Avanza con una curva suave hacia la pared (`seek_turn`) hasta tocarla.
 2. Al tocar **retrocede derecho** `contact_back_distance` (0,10 m a `contact_back_speed`) **antes de girar**, para que la cola no barra la pared.
 3. Gira en el lugar alejándose `contact_turn_angle_deg` (15°; `front_contact_turn_angle_deg` = 45° tras un contacto frontal) y vuelve a buscar el contacto.
@@ -401,8 +407,8 @@ Sigue una pared o borde físico (`side: right|left`) **por contacto con el bumpe
   el avance neto ordenado (avance menos retroceso, integrando `v·dt`), que **no detecta** un robot trabado; el log avisa una vez por activación (`sin TF odom -> base_footprint: ...`).
   El primer contacto tras activar no tiene contacto previo con que comparar y también usa el respaldo. Ejemplo típico del ciclo toque–retroceso 0,10 m–giro 15° en una esquina sin
   bumper frontal: avanza ~2–3 cm por ciclo.
-- **Borde perdido** (sin contacto por `bump_lost_timeout_s`, 10 s): búsqueda **acotada** (tramo recto y arco hacia la pared) por `search_timeout_s` (25 s);
-  si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
+- **Borde perdido** (una pared ya hallada que se pierde: sin contacto por `bump_lost_timeout_s`, 10 s): búsqueda **acotada** (arco hacia la pared y tramo recto) por
+  `lost_search_timeout_s` (25 s, es el `search_timeout_s` de antes: ahora `search_timeout_s` es solo la búsqueda inicial); si no lo reencuentra se detiene y avisa `perimeter_lost`. Otros fallos: `perimeter_blocked` (atascado o frente que no se libera).
 - **Todos los parámetros de contacto están en el YAML** para ajustarlos en el robot (ángulos, distancias, velocidades y tiempos).
 
 **Refinamiento con el sonar lateral (`use_side_sonar: true`):** el sonar del lado de la pared mide la distancia lateral (`lectura × sin(side_sonar_angle_deg)`) y un
@@ -437,7 +443,7 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    | `world` | Archivo | Qué es | Arranque |
    |---|---|---|---|
    | `room` | `config/sim_room.yaml` | cuarto de 10 × 8 m con un bloque y un obstáculo circular | (2, 1) |
-   | `field` | `config/sim_field.yaml` | campo abierto de 30 × 30 m, sin paredes interiores, con 3 obstáculos chicos (radios 0,25–0,4 m) y un borde exterior lejano a 5 m (de −5 a 35 en x e y) para que el robot no se escape | (15, 15), el centro |
+   | `field` | `config/sim_field.yaml` | campo abierto de 30 × 30 m con 3 obstáculos chicos (radios 0,25–0,4 m), un borde exterior lejano a 5 m (de −5 a 35 en x e y) para que el robot no se escape y dos barreras para probar `auto_perimeter`: una **pared recta de 12 m** en x = 19 (de y = 9 a 21, 4 m al este del arranque) y una **barrera en L de 3 × 3 m** con la esquina en (9, 13) y brazos hasta (9, 16) y (12, 13). Desde el arranque (mirando al este) el perimetral encuentra la pared recta; para la L arrancar `fake_robot` en (15, 15) con `yaw: 3.14159` (mira al oeste) | (15, 15), el centro |
 
    Un `world` desconocido hace fallar el launch con un mensaje claro. Los dos usan las mismas esquinas redondeadas de arriba.
 
@@ -496,7 +502,7 @@ usa si `side_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el sonar
    el nodo anterior con ceros. **No correr `ekf_local` ni la odometría real a la vez que `fake_robot`.**
 4. **Resultado en simulación** (cuarto de 10 m × 8 m con un bloque y un obstáculo): `random_walk` recorre ~20 celdas de 1 m en 5 min sin tocar nada
    y sin salir del cerco; `perimeter` (modo bumper) da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque, y con la pared fuera de alcance
-   se rinde a los 25 s con `perimeter_lost`; con el refinamiento del sonar lateral mantiene ~0,3 m.
+   se rinde a los `search_timeout_s` (120 s) con `perimeter_lost`; con el refinamiento del sonar lateral mantiene ~0,3 m.
 
 ## Bloque E: control de la cuchilla y mapa de cobertura
 

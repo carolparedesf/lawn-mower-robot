@@ -16,13 +16,21 @@ depender de que el chasis presione tambien un bumper frontal. El avance se mide 
 entre las posiciones de dos contactos consecutivos, `PerimeterInputs.pose`); sin pose, con la integracion de
 v*dt (que cree que avanza un robot trabado), y `progress_source` dice cual se uso. Esquina exterior / contacto
 perdido: busqueda acotada y, si falla, FAILED con alerta.
+
+Busqueda inicial del borde (al activarse, sin pared a la vista): avanza RECTO a `search_speed` hasta el primer contacto
+o la deteccion del sonar central (el sonar lateral, si esta habilitado, tambien). Si se acerca al borde del cerco
+virtual mirando hacia afuera (`search_edge_margin`), gira en el lugar hacia el interior (como random_walk) y sigue
+buscando. Solo se rinde pasados `search_timeout_s` (perimeter_lost). Una vez hallada la pared, sigue como arriba; si
+despues la pierde, la busqueda es la acotada de siempre (arco hacia la pared, `lost_search_timeout_s`).
 """
 import math
+import random
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 SEARCH_FORWARD = 'SEARCH_FORWARD'
 SEARCH_ARC = 'SEARCH_ARC'
+SEARCH_TURN = 'SEARCH_TURN'
 FOLLOW = 'FOLLOW'
 CORNER = 'CORNER'
 CORNER_BACK = 'CORNER_BACK'
@@ -86,12 +94,21 @@ class PerimeterParams:
     sonar_forward_offset: float = 0.19   # m, el sonar esta adelante del centro de giro
     outer_corner_extra: float = 0.10     # m de avance extra antes de rodear una esquina exterior
 
-    # ── Busqueda acotada ──
+    # ── Busqueda inicial del borde: recto hasta el primer contacto / sonar ──
+    search_speed: float = 0.15           # m/s
+    search_timeout_s: float = 120.0      # tiempo total de la busqueda inicial antes de rendirse (perimeter_lost)
+    search_edge_margin: float = 1.0      # m: a menos del borde del cerco y mirando hacia afuera, gira hacia adentro
+    search_turn_speed: float = 0.5       # rad/s del giro en el lugar
+    search_edge_spread_deg: float = 30.0   # variacion al azar (+-) sobre el giro exacto hacia el centroide
+    search_edge_turn_min_deg: float = 120.0   # sin centroide/pose: giro al azar entre estos angulos
+    search_edge_turn_max_deg: float = 180.0
+
+    # ── Busqueda acotada al perder el borde ya encontrado ──
     search_arc_time_s: float = 4.0
     search_arc_linear: float = 0.1
     search_arc_turn: float = 0.4
     search_forward_time_s: float = 3.0
-    search_timeout_s: float = 25.0       # tiempo total de busqueda antes de rendirse
+    lost_search_timeout_s: float = 25.0  # tiempo total de esta busqueda antes de rendirse (perimeter_lost)
 
 
 @dataclass
@@ -103,11 +120,15 @@ class PerimeterInputs:
     front_bumper: bool = False
     back_bumper: bool = False
     pose: Optional[Tuple[float, float]] = None   # (x, y) del robot en un frame fijo (odom/map); None = sin TF
+    # Cerco virtual (opcional: sin cerco la busqueda no maniobra en el borde)
+    edge_distance: Optional[float] = None    # /geofence/distance_to_edge, negativo = fuera (None si no hay dato)
+    interior_angle: Optional[float] = None   # giro [rad, + antihorario] que deja al robot mirando al centroide del cerco
 
 
 class PerimeterCore:
-    def __init__(self, params: PerimeterParams):
+    def __init__(self, params: PerimeterParams, seed: Optional[int] = None):
         self.p = params
+        self.rng = random.Random(seed)
         self.sign = 1.0 if params.side == 'left' else -1.0      # +1: la pared esta a la izquierda
         self.reset(0.0)
 
@@ -122,7 +143,10 @@ class PerimeterCore:
         self.fail_reason = ''
         self.state_since = now
         self.search_since = now
-        self.search_first = 'forward'        # al empezar: derecho; al perder la pared: arco
+        self.search_first = 'forward'        # al empezar: derecho hasta hallar un borde; al perder la pared: arco
+        self.search_until = 0.0              # fin del giro hacia el interior (SEARCH_TURN)
+        self.search_turn_sign = 1.0
+        self.search_edge_turns = 0           # giros hacia el interior hechos en la busqueda inicial
         self.lost_since: Optional[float] = None
         self.last_contact = now
         self.last_lateral = self.p.target_distance
@@ -239,7 +263,7 @@ class PerimeterCore:
                 return -p.contact_back_speed, 0.0
             else:
                 return 0.0, -self.sign * p.corner_turn_speed
-        elif center_blocked and not contact and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
+        elif center_blocked and not contact and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC, SEARCH_TURN):
             self.last_contact = now                       # una pared al frente tambien cuenta como borde encontrado
             self._set(CORNER, now)
             self.corner_since = now
@@ -248,7 +272,7 @@ class PerimeterCore:
 
         # Contacto: retrocede y se aleja. Si toca la cola (bumper trasero) no se puede retroceder:
         # al reves, se avanza para liberarla.
-        if (contact or inp.back_bumper) and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC):
+        if (contact or inp.back_bumper) and self.state in (FOLLOW, SEARCH_FORWARD, SEARCH_ARC, SEARCH_TURN):
             self.contact_kind = 'front' if inp.front_bumper else 'side'
             if self.contact_kind == 'side' and p.stalled_contacts > 0:
                 progress = self._progress(inp)
@@ -267,12 +291,12 @@ class PerimeterCore:
             return -p.contact_back_speed, 0.0
 
         # Busqueda: se sale al encontrar la pared (por contacto ya se atendio arriba)
-        if self.state in (SEARCH_FORWARD, SEARCH_ARC):
+        if self.state in (SEARCH_FORWARD, SEARCH_ARC, SEARCH_TURN):
             if wall:
                 self._set(FOLLOW, now)
                 self.lost_since = None
             else:
-                return self._search(now)
+                return self._search(inp, now)
 
         # FOLLOW
         if self.state == FOLLOW and self.unstick_count and now - self.state_since > 20.0:
@@ -320,7 +344,7 @@ class PerimeterCore:
         self.search_first = 'arc'
         self.search_since = now
         self._set(SEARCH_ARC, now)
-        return self._search(now)
+        return self._search(None, now)
 
     def _lost_limit(self) -> float:
         """Tiempo que se sigue derecho tras perder la pared antes de rodear la esquina (solo con sonar).
@@ -340,22 +364,58 @@ class PerimeterCore:
             return None                                        # sin eco
         return inp.side_range * math.sin(math.radians(self.p.side_sonar_angle_deg))
 
-    def _search(self, now: float):
-        """Busqueda acotada: tramos rectos y arcos hacia la pared, hasta search_timeout_s."""
+    def _search(self, inp: Optional[PerimeterInputs], now: float):
+        """Busqueda del borde. Inicial: recto (con giros hacia el interior del cerco) hasta `search_timeout_s`. Tras perder
+        un borde ya hallado: tramos rectos y arcos hacia la pared, hasta `lost_search_timeout_s`."""
         p = self.p
         rel = now - self.search_since
-        if rel > p.search_timeout_s:
+        if self.search_first == 'forward':
+            if rel > p.search_timeout_s:
+                return self._fail('perimeter_lost', now)
+            return self._search_straight(inp, now)
+        if rel > p.lost_search_timeout_s:
             return self._fail('perimeter_lost', now)
         phase = rel % (p.search_arc_time_s + p.search_forward_time_s)
-        if self.search_first == 'arc':
-            arc = phase < p.search_arc_time_s
-        else:
-            arc = phase >= p.search_forward_time_s
+        arc = phase < p.search_arc_time_s
         if arc:
             self.state = SEARCH_ARC
             return p.search_arc_linear, self.sign * p.search_arc_turn
         self.state = SEARCH_FORWARD
         return p.linear, 0.0
+
+    def _search_straight(self, inp: Optional[PerimeterInputs], now: float):
+        p = self.p
+        if self.state == SEARCH_TURN:
+            if now < self.search_until:
+                return 0.0, self.search_turn_sign * p.search_turn_speed
+            self.state = SEARCH_FORWARD
+        if inp is not None and self._near_edge_facing_out(inp):
+            self._start_edge_turn(inp, now)
+            return 0.0, self.search_turn_sign * p.search_turn_speed
+        self.state = SEARCH_FORWARD
+        return p.search_speed, 0.0
+
+    def _near_edge_facing_out(self, inp: PerimeterInputs) -> bool:
+        """Cerca del borde del cerco (o fuera) y avanzando hacia afuera: hay que dar la vuelta. Sin cerco, nunca."""
+        if inp.edge_distance is None or inp.edge_distance >= self.p.search_edge_margin:
+            return False
+        if inp.edge_distance < 0.0 or inp.interior_angle is None:
+            return True                                   # fuera, o sin rumbo al interior: por prudencia
+        return abs(inp.interior_angle) > math.pi / 2.0
+
+    def _start_edge_turn(self, inp: PerimeterInputs, now: float) -> None:
+        p = self.p
+        if inp.interior_angle is not None:
+            spread = math.radians(p.search_edge_spread_deg)
+            angle = inp.interior_angle + self.rng.uniform(-spread, spread)
+            self.search_turn_sign = 1.0 if angle >= 0.0 else -1.0
+            magnitude = abs(angle)
+        else:
+            magnitude = math.radians(self.rng.uniform(p.search_edge_turn_min_deg, p.search_edge_turn_max_deg))
+            self.search_turn_sign = self.rng.choice((-1.0, 1.0))
+        self.search_edge_turns += 1
+        self.state = SEARCH_TURN
+        self.search_until = now + magnitude / p.search_turn_speed
 
     def _fail(self, reason: str, now: float):
         self.state = FAILED
