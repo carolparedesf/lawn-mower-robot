@@ -15,7 +15,7 @@ void main() {
       'estop', 'geofence_breach', 'tf_lost', 'no_progress', 'perimeter_blocked',
       'perimeter_lost', 'perimeter_misconfigured', 'random_blocked',
       'local_minimum', 'geofence_not_ready', 'coverage_error', 'no_pose',
-      'auto_start_timeout', 'obstacle_near',
+      'auto_start_timeout', 'obstacle_near', 'imu_lost', 'outside_fence',
       // /robot/events
       'lifted', 'cutting_started', 'navigation_started', 'perimeter_started',
       'low_battery',
@@ -34,6 +34,17 @@ void main() {
     expect(describeAlert('geofence_breach')!.severity, AlertSeverity.error);
     expect(describeAlert('estop')!.severity, AlertSeverity.error);
     expect(describeAlert('obstacle_near')!.severity, AlertSeverity.warning);
+  });
+
+  test('imu_lost and outside_fence have their Spanish text and are errors', () {
+    final imu = describeAlert('imu_lost')!;
+    expect(imu.text, 'Se perdió el IMU: modos automáticos detenidos');
+    expect(imu.severity, AlertSeverity.error);
+    expect(imu.isEvent, isFalse);
+    final fence = describeAlert('outside_fence')!;
+    expect(fence.text, 'El robot salió del cerco');
+    expect(fence.severity, AlertSeverity.error);
+    expect(fence.isEvent, isFalse);
   });
 
   test('events are flagged as one-shot', () {
