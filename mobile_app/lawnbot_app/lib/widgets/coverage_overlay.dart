@@ -77,7 +77,7 @@ class CoverageControls extends StatelessWidget {
             style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: RoboColors.textTertiary,
+              color: RoboColors.textSecondary,
             ),
           ),
         ],

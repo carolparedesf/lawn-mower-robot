@@ -31,10 +31,10 @@ class ModeCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: selected ? RoboColors.selectedSurface : Colors.white,
+          color: selected ? RoboColors.statusBar : Colors.white,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? RoboColors.primaryGreen : RoboColors.border,
+            color: selected ? RoboColors.primary : RoboColors.border,
             width: 2.5,
           ),
         ),
@@ -59,7 +59,7 @@ class ModeCard extends StatelessWidget {
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 15,
-                      color: RoboColors.darkGreen,
+                      color: RoboColors.text,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -67,7 +67,7 @@ class ModeCard extends StatelessWidget {
                     subtitle,
                     style: const TextStyle(
                       fontSize: 12,
-                      color: RoboColors.textSecondary,
+                      color: RoboColors.textMuted,
                     ),
                   ),
                 ],
@@ -78,7 +78,7 @@ class ModeCard extends StatelessWidget {
                 width: 24,
                 height: 24,
                 decoration: const BoxDecoration(
-                  color: RoboColors.primaryGreen,
+                  color: RoboColors.primary,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.check, color: Colors.white, size: 14),

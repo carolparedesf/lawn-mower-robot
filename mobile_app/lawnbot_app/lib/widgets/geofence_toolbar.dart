@@ -32,7 +32,7 @@ class GeofenceToolbar extends StatelessWidget {
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w800,
-              color: RoboColors.darkGreen,
+              color: RoboColors.text,
             ),
           ),
           const SizedBox(width: 6),
@@ -40,7 +40,7 @@ class GeofenceToolbar extends StatelessWidget {
             icon: Icons.undo,
             tooltip: 'Deshacer',
             background: RoboColors.border,
-            iconColor: RoboColors.textTertiary,
+            iconColor: RoboColors.textSecondary,
             onTap: geofence.points.isEmpty ? null : geofence.undo,
           ),
           _ToolbarButton(
@@ -54,7 +54,7 @@ class GeofenceToolbar extends StatelessWidget {
             icon: Icons.send,
             tooltip: 'Enviar geofence',
             background:
-                geofence.canSend ? RoboColors.darkGreen : RoboColors.disabled,
+                geofence.canSend ? RoboColors.primary : RoboColors.disabled,
             iconColor: Colors.white,
             onTap: geofence.canSend
                 ? () {

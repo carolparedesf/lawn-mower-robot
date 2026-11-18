@@ -81,13 +81,13 @@ class ActuatorsScreen extends StatelessWidget {
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
-                  color: RoboColors.darkGreen,
+                  color: RoboColors.text,
                 ),
               ),
               SizedBox(height: 2),
               Text(
                 'Control manual de herramientas',
-                style: TextStyle(fontSize: 13, color: RoboColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: RoboColors.textMuted),
               ),
             ],
           ),
@@ -109,23 +109,23 @@ class ActuatorsScreen extends StatelessWidget {
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: status.bladeRunning
-                          ? RoboColors.primaryGreen
+                          ? RoboColors.primary
                           : RoboColors.disabled,
                       width: 3,
                     ),
                   ),
                 ),
                 iconBg: status.bladeRunning
-                    ? RoboColors.selectedSurfaceAlt
+                    ? RoboColors.statusBar
                     : RoboColors.border,
                 title: 'Cuchilla de corte',
                 statusLabel: _requestLabel(status.blade, status.bladeRunning),
                 statusColor: status.bladeRunning
-                    ? RoboColors.primaryGreen
-                    : RoboColors.textSecondary,
+                    ? RoboColors.primary
+                    : RoboColors.textMuted,
                 detail: _detail(status.blade, status.bladeRunning,
                     motors['cutter']),
-                detailColor: RoboColors.amberAccent,
+                detailColor: RoboColors.warning,
                 value: status.blade,
                 onChanged: canUse
                     ? (v) => actuator.setActuators(status, blade: v)
@@ -140,24 +140,24 @@ class ActuatorsScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(7),
                     border: Border.all(
                       color: status.trimmerRunning
-                          ? RoboColors.amberAccent
+                          ? RoboColors.warning
                           : RoboColors.disabled,
                       width: 3,
                     ),
                   ),
                 ),
                 iconBg: status.trimmerRunning
-                    ? RoboColors.amberChip
+                    ? RoboColors.warningChip
                     : RoboColors.border,
                 title: 'Trimmer / Bordeadora',
                 statusLabel:
                     _requestLabel(status.trimmer, status.trimmerRunning),
                 statusColor: status.trimmerRunning
-                    ? RoboColors.amberAccent
-                    : RoboColors.textSecondary,
+                    ? RoboColors.warning
+                    : RoboColors.textMuted,
                 detail: _detail(status.trimmer, status.trimmerRunning,
                     motors['trimmer']),
-                detailColor: RoboColors.amberAccent,
+                detailColor: RoboColors.warning,
                 value: status.trimmer,
                 onChanged: canUse
                     ? (v) => actuator.setActuators(status, trimmer: v)
@@ -171,7 +171,7 @@ class ActuatorsScreen extends StatelessWidget {
                 statusLabel: status.forceCut ? 'Forzado' : 'Desactivado',
                 statusColor: status.forceCut
                     ? RoboColors.error
-                    : RoboColors.textSecondary,
+                    : RoboColors.textMuted,
                 detail: 'Anula solo la detección de pasto. Cerco, levantado, '
                     'inclinación y emergencia siguen activos.',
                 value: status.forceCut,
@@ -203,7 +203,7 @@ class ActuatorsScreen extends StatelessWidget {
                           style: TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 15,
-                            color: RoboColors.darkGreen,
+                            color: RoboColors.text,
                           ),
                         ),
                         Text(
@@ -236,7 +236,7 @@ class ActuatorsScreen extends StatelessWidget {
                               : 'Conectar a carga',
                           style: const TextStyle(
                               fontSize: 12,
-                              color: RoboColors.textSecondary),
+                              color: RoboColors.textMuted),
                         ),
                         Switch(
                           value: status.charging,
@@ -282,13 +282,13 @@ class _Notice extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: RoboColors.amberChip,
+        color: RoboColors.warningChip,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         children: [
           const Icon(Icons.info_outline,
-              size: 16, color: RoboColors.textTertiary),
+              size: 16, color: RoboColors.textSecondary),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -296,7 +296,7 @@ class _Notice extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: RoboColors.textTertiary,
+                color: RoboColors.textSecondary,
               ),
             ),
           ),

@@ -73,7 +73,7 @@ class _RectangleDialogState extends State<RectangleDialog> {
             const Text(
               'La esquina es el punto que tocaste. El largo sigue la '
               'orientación y el ancho sale hacia la derecha.',
-              style: TextStyle(fontSize: 12, color: RoboColors.textSecondary),
+              style: TextStyle(fontSize: 12, color: RoboColors.textMuted),
             ),
             const SizedBox(height: 10),
             _field('rect_width', 'Ancho (m)', _width),

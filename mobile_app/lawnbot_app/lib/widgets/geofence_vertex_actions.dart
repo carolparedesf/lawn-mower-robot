@@ -27,7 +27,7 @@ class GeofenceSizeLabel extends StatelessWidget {
         style: const TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w700,
-          color: RoboColors.darkGreen,
+          color: RoboColors.text,
         ),
       ),
     );
@@ -69,7 +69,7 @@ class GeofenceVertexActions extends StatelessWidget {
           key: const Key('rectangle_by_measures'),
           avatar: Icon(pickingCorner ? Icons.close : Icons.crop_square, size: 16),
           label: Text(pickingCorner ? 'Cancelar rectángulo' : 'Rectángulo por medidas'),
-          backgroundColor: pickingCorner ? RoboColors.amberChip : Colors.white,
+          backgroundColor: pickingCorner ? RoboColors.warningChip : Colors.white,
           onPressed: onRectangle,
         ),
       ],

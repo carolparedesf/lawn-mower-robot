@@ -48,7 +48,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return Scaffold(
-      body: SafeArea(child: body),
+      // The top bar paints the status-bar area itself (pink, edge to edge)
+      body: SafeArea(top: false, child: body),
       bottomNavigationBar: SafeArea(
         top: false,
         child: RoboBottomNav(active: _tab, onTap: _onNavigate),

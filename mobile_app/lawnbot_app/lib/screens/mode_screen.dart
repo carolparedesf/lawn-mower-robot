@@ -39,13 +39,13 @@ class ModeScreen extends StatelessWidget {
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
-                  color: RoboColors.darkGreen,
+                  color: RoboColors.text,
                 ),
               ),
               SizedBox(height: 2),
               Text(
                 'Elegí cómo va a cortar el robot',
-                style: TextStyle(fontSize: 13, color: RoboColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: RoboColors.textMuted),
               ),
             ],
           ),
@@ -56,8 +56,8 @@ class ModeScreen extends StatelessWidget {
             children: [
               ModeCard(
                 icon: Icons.view_stream,
-                iconBg: RoboColors.blueChip,
-                iconColor: RoboColors.blueAccent,
+                iconBg: RoboColors.statusBar,
+                iconColor: RoboColors.primary,
                 title: 'Líneas paralelas',
                 subtitle: 'Corte prolijo en franjas rectas',
                 selected: currentMode == 'auto_parallel',
@@ -66,8 +66,8 @@ class ModeScreen extends StatelessWidget {
               const SizedBox(height: 14),
               ModeCard(
                 icon: Icons.shuffle,
-                iconBg: RoboColors.amberChip,
-                iconColor: RoboColors.amberAccent,
+                iconBg: RoboColors.statusBar,
+                iconColor: RoboColors.primary,
                 title: 'Aleatorio',
                 subtitle: 'Recorrido libre, ideal jardines chicos',
                 selected: currentMode == 'auto_random',
@@ -76,8 +76,8 @@ class ModeScreen extends StatelessWidget {
               const SizedBox(height: 14),
               ModeCard(
                 icon: Icons.border_outer,
-                iconBg: RoboColors.selectedSurfaceAlt,
-                iconColor: RoboColors.primaryGreen,
+                iconBg: RoboColors.statusBar,
+                iconColor: RoboColors.primary,
                 title: 'Perimetral',
                 subtitle: 'Bordea el contorno del cerco',
                 selected: currentMode == 'auto_perimeter',
