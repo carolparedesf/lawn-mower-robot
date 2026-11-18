@@ -34,45 +34,24 @@ class GeofenceSizeLabel extends StatelessWidget {
   }
 }
 
-/// Extra ways to create vertices besides tapping the map.
+/// "Vértice en el robot": adds a vertex at the robot's last position.
 class GeofenceVertexActions extends StatelessWidget {
   /// Null when the robot position is missing or stale: the button is disabled.
   final VoidCallback? onAddAtRobot;
-  final VoidCallback onRectangle;
-  final bool pickingCorner;
 
-  const GeofenceVertexActions({
-    super.key,
-    required this.onAddAtRobot,
-    required this.onRectangle,
-    required this.pickingCorner,
-  });
+  const GeofenceVertexActions({super.key, required this.onAddAtRobot});
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
-      alignment: WrapAlignment.center,
-      children: [
-        ActionChip(
-          key: const Key('add_vertex_at_robot'),
-          avatar: const Icon(Icons.my_location, size: 16),
-          label: const Text('Vértice en el robot'),
-          tooltip: onAddAtRobot == null
-              ? 'Requiere una posición del robot de menos de 3 s'
-              : 'Agregar un vértice en la posición actual del robot',
-          backgroundColor: Colors.white,
-          onPressed: onAddAtRobot,
-        ),
-        ActionChip(
-          key: const Key('rectangle_by_measures'),
-          avatar: Icon(pickingCorner ? Icons.close : Icons.crop_square, size: 16),
-          label: Text(pickingCorner ? 'Cancelar rectángulo' : 'Rectángulo por medidas'),
-          backgroundColor: pickingCorner ? RoboColors.warningChip : Colors.white,
-          onPressed: onRectangle,
-        ),
-      ],
+    return ActionChip(
+      key: const Key('add_vertex_at_robot'),
+      avatar: const Icon(Icons.my_location, size: 16),
+      label: const Text('Vértice en el robot'),
+      tooltip: onAddAtRobot == null
+          ? 'Requiere una posición del robot de menos de 3 s'
+          : 'Agregar un vértice en la posición actual del robot',
+      backgroundColor: Colors.white,
+      onPressed: onAddAtRobot,
     );
   }
 }

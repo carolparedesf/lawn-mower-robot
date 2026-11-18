@@ -5,22 +5,14 @@ import 'package:provider/provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
+import '../utils/mode_labels.dart';
 import '../widgets/joystick_widget.dart';
 import '../widgets/robo_bottom_nav.dart';
 import '../widgets/robo_top_bar.dart';
-import '../widgets/speed_limit_selector.dart';
 import '../widgets/robot_marker.dart';
+import '../widgets/speed_limit_selector.dart';
 
 const LatLng _defaultCenter = LatLng(-25.2867, -57.6470);
-
-const Map<String, String> _modeLabels = {
-  'manual': 'Manual',
-  'auto_parallel': 'Líneas paralelas',
-  'auto_random': 'Aleatorio',
-  'auto_perimeter': 'Perimetral',
-  'stop': 'Detenido',
-  'idle': 'Inactivo',
-};
 
 /// "Inicio" tab. Real GPS map (tiles, robot marker+heading, polyline trail,
 /// follow-toggle) replaces the mockup's fake SVG yard box; everything else
@@ -97,16 +89,16 @@ class _ControlScreenState extends State<ControlScreen> {
                             TileLayer(
                               urlTemplate:
                                   'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                              userAgentPackageName:
-                                  'com.example.lawnbot_app',
+                              userAgentPackageName: 'com.example.lawnbot_app',
                             ),
                             if (robotState.positionHistory.length > 1)
                               PolylineLayer(
                                 polylines: [
                                   Polyline(
                                     points: robotState.positionHistory,
-                                    color: RoboColors.primary
-                                        .withValues(alpha: 0.6),
+                                    color: RoboColors.primary.withValues(
+                                      alpha: 0.6,
+                                    ),
                                     strokeWidth: 3,
                                   ),
                                 ],
@@ -140,9 +132,11 @@ class _ControlScreenState extends State<ControlScreen> {
                                 : RoboColors.primary,
                             onPressed: () =>
                                 setState(() => _followRobot = !_followRobot),
-                            child: Icon(_followRobot
-                                ? Icons.gps_fixed
-                                : Icons.gps_not_fixed),
+                            child: Icon(
+                              _followRobot
+                                  ? Icons.gps_fixed
+                                  : Icons.gps_not_fixed,
+                            ),
                           ),
                         ),
                       ],
@@ -152,7 +146,9 @@ class _ControlScreenState extends State<ControlScreen> {
                 const SizedBox(height: 10),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
@@ -167,27 +163,31 @@ class _ControlScreenState extends State<ControlScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'MODO SELECCIONADO',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: RoboColors.textMuted,
-                              letterSpacing: 0.4,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'MODO SELECCIONADO',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: RoboColors.textMuted,
+                                letterSpacing: 0.4,
+                              ),
                             ),
-                          ),
-                          Text(
-                            _modeLabels[status.mode] ?? status.mode,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: RoboColors.text,
+                            Text(
+                              modeLabel(status.mode),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: RoboColors.text,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                       TextButton(
                         onPressed: () => widget.onNavigate(RoboTab.modo),
@@ -195,14 +195,20 @@ class _ControlScreenState extends State<ControlScreen> {
                           backgroundColor: RoboColors.statusBar,
                           foregroundColor: RoboColors.primary,
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 8),
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        child: const Text('Cambiar',
-                            style: TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w700)),
+                        child: const Text(
+                          'Cambiar',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -227,12 +233,15 @@ class _ControlScreenState extends State<ControlScreen> {
             child: ElevatedButton(
               onPressed: () => _toggleAutonomous(isAutonomous),
               style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    isAutonomous ? RoboColors.error : RoboColors.primary,
+                backgroundColor: isAutonomous
+                    ? RoboColors.error
+                    : RoboColors.primary,
               ),
-              child: Text(isAutonomous
-                  ? '⏸ Detener modo autónomo'
-                  : 'Iniciar modo autónomo'),
+              child: Text(
+                isAutonomous
+                    ? 'Detener modo autónomo'
+                    : 'Iniciar modo autónomo',
+              ),
             ),
           ),
         ),

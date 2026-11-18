@@ -5,6 +5,9 @@ import 'package:mqtt_client/mqtt_client.dart';
 import '../config/mqtt_config.dart';
 import '../services/mqtt_service.dart';
 
+/// Payload of robot/cmd/move for "no movement" (what the joystick sends on release).
+String stopMovePayload() => jsonEncode({'dir': 'stop', 'speed': 0.0});
+
 class ConnectionProvider extends ChangeNotifier {
   bool _connected = false;
   bool _connecting = false;
@@ -37,6 +40,16 @@ class ConnectionProvider extends ChangeNotifier {
 
   void disconnect() {
     MqttService.instance.disconnect();
+  }
+
+  /// STOP: speed 0 on robot/cmd/move (same format as the joystick) and the
+  /// "stop" mode on robot/cmd/mode (same as the Detener button).
+  void sendStop() {
+    MqttService.instance.publish(
+      MqttConfig.topicCmdMove,
+      stopMovePayload(),
+    );
+    setMode('stop');
   }
 
   void setMode(String mode) {

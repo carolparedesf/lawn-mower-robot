@@ -33,31 +33,6 @@ LatLng localToLatLng(double x, double y, double lat0, double lng0) {
   );
 }
 
-/// Four vertices of a [width] x [length] meter rectangle with one corner at
-/// [corner]. [bearingDeg] is the compass bearing (degrees clockwise from
-/// north) of the side of size [length]; [width] extends to the right of that
-/// direction. With bearing 0 the rectangle grows north (length) and east
-/// (width) from [corner].
-///
-/// Order: corner, corner + length, corner + length + width, corner + width.
-List<LatLng> rectangleFromCorner(
-  LatLng corner,
-  double width,
-  double length,
-  double bearingDeg,
-) {
-  final b = bearingDeg * math.pi / 180.0;
-  final ux = math.sin(b) * length, uy = math.cos(b) * length;
-  final vx = math.cos(b) * width, vy = -math.sin(b) * width;
-  final lat0 = corner.latitude, lng0 = corner.longitude;
-  return [
-    corner,
-    localToLatLng(ux, uy, lat0, lng0),
-    localToLatLng(ux + vx, uy + vy, lat0, lng0),
-    localToLatLng(vx, vy, lat0, lng0),
-  ];
-}
-
 /// Size of a drawn polygon in meters.
 class PolygonSize {
   /// East-west extent of the bounding box.

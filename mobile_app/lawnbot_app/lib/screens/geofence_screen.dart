@@ -12,7 +12,6 @@ import '../widgets/coverage_overlay.dart';
 import '../widgets/geofence_notices.dart';
 import '../widgets/geofence_toolbar.dart';
 import '../widgets/geofence_vertex_actions.dart';
-import '../widgets/rectangle_dialog.dart';
 import '../widgets/robot_marker.dart';
 import '../widgets/robo_top_bar.dart';
 
@@ -32,7 +31,6 @@ class GeofenceScreen extends StatefulWidget {
 class _GeofenceScreenState extends State<GeofenceScreen> {
   final MapController _mapController = MapController();
   bool _centeredOnRobot = false;
-  bool _pickingCorner = false;
   Timer? _tick;
 
   @override
@@ -48,16 +46,6 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
   void dispose() {
     _tick?.cancel();
     super.dispose();
-  }
-
-  Future<void> _onMapTap(GeofenceProvider geofence, LatLng latlng) async {
-    if (!_pickingCorner) {
-      geofence.addPoint(latlng);
-      return;
-    }
-    setState(() => _pickingCorner = false);
-    final vertices = await showRectangleDialog(context, latlng);
-    if (vertices != null) geofence.setPoints(vertices);
   }
 
   @override
@@ -123,7 +111,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                     options: MapOptions(
                       initialCenter: center,
                       initialZoom: 18,
-                      onTap: (_, latlng) => _onMapTap(geofence, latlng),
+                      onTap: (_, latlng) => geofence.addPoint(latlng),
                     ),
                     children: [
                       TileLayer(
@@ -209,11 +197,9 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                             color: Colors.white.withValues(alpha: 0.92),
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          child: Text(
-                            _pickingCorner
-                                ? 'Tocá el mapa en una esquina del rectángulo'
-                                : 'Tocá el mapa para agregar puntos',
-                            style: const TextStyle(
+                          child: const Text(
+                            'Tocá el mapa para agregar puntos',
+                            style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
                               color: RoboColors.text,
@@ -239,14 +225,11 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         GeofenceVertexActions(
-                          pickingCorner: _pickingCorner,
                           onAddAtRobot: (robotPos != null &&
                                   robotPos.isFresh(DateTime.now()))
                               ? () => geofence
                                   .addPoint(LatLng(robotPos.lat, robotPos.lng))
                               : null,
-                          onRectangle: () =>
-                              setState(() => _pickingCorner = !_pickingCorner),
                         ),
                         const SizedBox(height: 8),
                         const GeofenceToolbar(),
