@@ -8,6 +8,7 @@ import '../theme/robo_theme.dart';
 import '../widgets/joystick_widget.dart';
 import '../widgets/robo_bottom_nav.dart';
 import '../widgets/robo_top_bar.dart';
+import '../widgets/speed_limit_selector.dart';
 import '../widgets/robot_marker.dart';
 
 const LatLng _defaultCenter = LatLng(-25.2867, -57.6470);
@@ -206,7 +207,9 @@ class _ControlScreenState extends State<ControlScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
+                const SpeedLimitSelector(),
+                const SizedBox(height: 6),
                 const SizedBox(
                   height: 156,
                   child: Center(child: JoystickWidget()),

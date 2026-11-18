@@ -5,6 +5,7 @@ import 'providers/connection_provider.dart';
 import 'providers/coverage_map_provider.dart';
 import 'providers/geofence_provider.dart';
 import 'providers/robot_state_provider.dart';
+import 'providers/speed_limit_provider.dart';
 import 'screens/home_screen.dart';
 import 'theme/robo_theme.dart';
 
@@ -24,6 +25,7 @@ class RobotControlApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => GeofenceProvider()),
         ChangeNotifierProvider(create: (_) => ActuatorProvider()),
         ChangeNotifierProvider(create: (_) => CoverageMapProvider()),
+        ChangeNotifierProvider(create: (_) => SpeedLimitProvider()),
       ],
       child: MaterialApp(
         title: 'RobotControl',
