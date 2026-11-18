@@ -100,13 +100,13 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
-                  color: RoboColors.darkGreen,
+                  color: RoboColors.text,
                 ),
               ),
               SizedBox(height: 2),
               Text(
                 'Marcá el área donde puede cortar el robot',
-                style: TextStyle(fontSize: 13, color: RoboColors.textSecondary),
+                style: TextStyle(fontSize: 13, color: RoboColors.textMuted),
               ),
             ],
           ),
@@ -138,11 +138,11 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                           polygons: [
                             Polygon(
                               points: geofence.points,
-                              color: RoboColors.primaryGreen
+                              color: RoboColors.primary
                                   .withValues(alpha: 0.35),
                               borderColor: (geofenceBreach || badShape)
                                   ? RoboColors.error
-                                  : RoboColors.darkGreen,
+                                  : RoboColors.primary,
                               borderStrokeWidth: geofenceBreach ? 3 : 3,
                             ),
                           ],
@@ -171,7 +171,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                               height: 26,
                               child: Container(
                                 decoration: const BoxDecoration(
-                                  color: RoboColors.amberAccent,
+                                  color: RoboColors.primary,
                                   shape: BoxShape.circle,
                                   border:
                                       Border.fromBorderSide(BorderSide(
@@ -183,7 +183,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                                   child: Text(
                                     '${i + 1}',
                                     style: const TextStyle(
-                                      color: RoboColors.darkGreen,
+                                      color: Colors.white,
                                       fontWeight: FontWeight.w700,
                                       fontSize: 10,
                                     ),
@@ -216,7 +216,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                             style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
-                              color: RoboColors.darkGreen,
+                              color: RoboColors.text,
                             ),
                           ),
                         ),
@@ -261,7 +261,7 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                       heroTag: 'center_on_robot',
                       tooltip: 'Centrar en el robot',
                       backgroundColor: Colors.white,
-                      foregroundColor: RoboColors.darkGreen,
+                      foregroundColor: RoboColors.text,
                       onPressed: robotPos == null
                           ? () => ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(

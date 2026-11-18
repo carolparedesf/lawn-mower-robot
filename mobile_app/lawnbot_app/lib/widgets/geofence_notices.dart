@@ -36,8 +36,8 @@ class GeofenceProblemBanner extends StatelessWidget {
     return _NoticeBox(
       icon: isHint ? Icons.info_outline : Icons.warning_amber_rounded,
       text: geofenceProblemMessage(problem),
-      background: isHint ? RoboColors.amberChip : RoboColors.errorChip,
-      foreground: isHint ? RoboColors.textTertiary : RoboColors.error,
+      background: isHint ? RoboColors.warningChip : RoboColors.errorChip,
+      foreground: isHint ? RoboColors.textSecondary : RoboColors.error,
     );
   }
 }
@@ -78,11 +78,11 @@ class GeofenceRobotStatus extends StatelessWidget {
           : (rejected ? Icons.error_outline : Icons.hourglass_empty),
       text: text,
       background: ok
-          ? RoboColors.selectedSurfaceAlt
-          : (rejected ? RoboColors.errorChip : RoboColors.amberChip),
+          ? RoboColors.successChip
+          : (rejected ? RoboColors.errorChip : RoboColors.warningChip),
       foreground: ok
-          ? RoboColors.darkGreen
-          : (rejected ? RoboColors.error : RoboColors.textTertiary),
+          ? RoboColors.successDark
+          : (rejected ? RoboColors.error : RoboColors.textSecondary),
     );
   }
 }

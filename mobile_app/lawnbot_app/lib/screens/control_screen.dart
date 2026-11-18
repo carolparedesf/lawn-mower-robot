@@ -104,7 +104,7 @@ class _ControlScreenState extends State<ControlScreen> {
                                 polylines: [
                                   Polyline(
                                     points: robotState.positionHistory,
-                                    color: RoboColors.blueAccent
+                                    color: RoboColors.primary
                                         .withValues(alpha: 0.6),
                                     strokeWidth: 3,
                                   ),
@@ -132,11 +132,11 @@ class _ControlScreenState extends State<ControlScreen> {
                           child: FloatingActionButton.small(
                             heroTag: 'follow-robot',
                             backgroundColor: _followRobot
-                                ? RoboColors.primaryGreen
+                                ? RoboColors.primary
                                 : Colors.white,
                             foregroundColor: _followRobot
                                 ? Colors.white
-                                : RoboColors.primaryGreen,
+                                : RoboColors.primary,
                             onPressed: () =>
                                 setState(() => _followRobot = !_followRobot),
                             child: Icon(_followRobot
@@ -174,7 +174,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
-                              color: RoboColors.textSecondary,
+                              color: RoboColors.textMuted,
                               letterSpacing: 0.4,
                             ),
                           ),
@@ -183,7 +183,7 @@ class _ControlScreenState extends State<ControlScreen> {
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
-                              color: RoboColors.darkGreen,
+                              color: RoboColors.text,
                             ),
                           ),
                         ],
@@ -191,8 +191,8 @@ class _ControlScreenState extends State<ControlScreen> {
                       TextButton(
                         onPressed: () => widget.onNavigate(RoboTab.modo),
                         style: TextButton.styleFrom(
-                          backgroundColor: RoboColors.blueChip,
-                          foregroundColor: RoboColors.blueAccent,
+                          backgroundColor: RoboColors.statusBar,
+                          foregroundColor: RoboColors.primary,
                           padding: const EdgeInsets.symmetric(
                               horizontal: 14, vertical: 8),
                           shape: RoundedRectangleBorder(
@@ -224,13 +224,8 @@ class _ControlScreenState extends State<ControlScreen> {
             child: ElevatedButton(
               onPressed: () => _toggleAutonomous(isAutonomous),
               style: ElevatedButton.styleFrom(
-                backgroundColor: isAutonomous
-                    ? RoboColors.error
-                    : RoboColors.amberAccent,
-                shadowColor: (isAutonomous
-                        ? RoboColors.error
-                        : RoboColors.amberAccent)
-                    .withValues(alpha: 0.4),
+                backgroundColor:
+                    isAutonomous ? RoboColors.error : RoboColors.primary,
               ),
               child: Text(isAutonomous
                   ? '⏸ Detener modo autónomo'

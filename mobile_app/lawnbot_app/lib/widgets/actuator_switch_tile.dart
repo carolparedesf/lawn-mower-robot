@@ -65,7 +65,7 @@ class ActuatorSwitchTile extends StatelessWidget {
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
-                    color: RoboColors.darkGreen,
+                    color: RoboColors.text,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -84,7 +84,7 @@ class ActuatorSwitchTile extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: detailColor ?? RoboColors.textSecondary,
+                      color: detailColor ?? RoboColors.textMuted,
                     ),
                   ),
                 ],

@@ -20,7 +20,7 @@ class RobotMarker extends StatelessWidget {
       angle: headingDegrees * math.pi / 180,
       child: Container(
         decoration: BoxDecoration(
-          color: isConnected ? RoboColors.amberAccent : Colors.grey.shade400,
+          color: isConnected ? RoboColors.primary : Colors.grey.shade400,
           shape: BoxShape.circle,
           border: const Border.fromBorderSide(
             BorderSide(color: Colors.white, width: 3),

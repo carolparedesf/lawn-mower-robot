@@ -24,12 +24,12 @@ class AlertBanner extends StatelessWidget {
         fg = RoboColors.error;
         icon = Icons.error_outline;
       case AlertSeverity.warning:
-        bg = RoboColors.amberChip;
-        fg = RoboColors.textTertiary;
+        bg = RoboColors.warningChip;
+        fg = RoboColors.textSecondary;
         icon = Icons.warning_amber_rounded;
       case AlertSeverity.info:
-        bg = RoboColors.blueChip;
-        fg = RoboColors.textTertiary;
+        bg = RoboColors.statusBar;
+        fg = RoboColors.textSecondary;
         icon = Icons.info_outline;
     }
 
