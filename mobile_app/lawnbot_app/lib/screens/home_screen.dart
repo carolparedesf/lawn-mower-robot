@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/connection_provider.dart';
 import '../widgets/robo_bottom_nav.dart';
+import '../widgets/stop_button.dart';
 import 'actuators_screen.dart';
 import 'control_screen.dart';
 import 'geofence_screen.dart';
@@ -50,9 +51,16 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       // The top bar paints the status-bar area itself (pink, edge to edge)
       body: SafeArea(top: false, child: body),
+      // STOP is on every screen, right above the navigation
       bottomNavigationBar: SafeArea(
         top: false,
-        child: RoboBottomNav(active: _tab, onTap: _onNavigate),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const StopButton(),
+            RoboBottomNav(active: _tab, onTap: _onNavigate),
+          ],
+        ),
       ),
     );
   }

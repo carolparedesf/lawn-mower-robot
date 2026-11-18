@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
+import '../utils/mode_labels.dart';
 import 'alert_banner.dart';
 import 'battery_display.dart';
 
@@ -68,26 +69,37 @@ class RoboTopBar extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
               color: RoboColors.statusBar,
-              border: Border(bottom: BorderSide(color: RoboColors.borderStrong)),
+              border: Border(
+                bottom: BorderSide(color: RoboColors.borderStrong),
+              ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.settings_remote,
-                        size: 22, color: RoboColors.text),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Modo: ${status.mode}',
-                      key: const Key('status_mode'),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.settings_remote,
+                        size: 22,
                         color: RoboColors.text,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Modo: ${modeLabel(status.mode)}',
+                          key: const Key('status_mode'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: RoboColors.text,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 Row(
                   children: [
@@ -131,8 +143,8 @@ class _ConnectionChip extends StatelessWidget {
     final color = connected
         ? RoboColors.success
         : connecting
-            ? RoboColors.warning
-            : RoboColors.error;
+        ? RoboColors.warning
+        : RoboColors.error;
     return Container(
       key: const Key('connection_chip'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -154,8 +166,8 @@ class _ConnectionChip extends StatelessWidget {
             connected
                 ? 'Conectado'
                 : connecting
-                    ? 'Conectando...'
-                    : 'Desconectado',
+                ? 'Conectando...'
+                : 'Desconectado',
             style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
