@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:robotmapapp/providers/connection_provider.dart';
 import 'package:robotmapapp/providers/robot_state_provider.dart';
+import 'package:robotmapapp/providers/speed_limit_provider.dart';
 import 'package:robotmapapp/screens/control_screen.dart';
 import 'package:robotmapapp/widgets/joystick_widget.dart';
 
@@ -16,6 +17,7 @@ void main() {
       providers: [
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
         ChangeNotifierProvider(create: (_) => RobotStateProvider()),
+        ChangeNotifierProvider(create: (_) => SpeedLimitProvider()),
       ],
       child: MaterialApp(
         home: Scaffold(
