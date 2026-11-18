@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +9,7 @@ import 'package:robotmapapp/providers/coverage_map_provider.dart';
 import 'package:robotmapapp/providers/geofence_provider.dart';
 import 'package:robotmapapp/providers/robot_state_provider.dart';
 import 'package:robotmapapp/screens/geofence_screen.dart';
+import 'package:robotmapapp/theme/robo_theme.dart';
 import 'package:robotmapapp/utils/geo.dart';
 
 const _corner = LatLng(-25.2867, -57.6470);
@@ -77,6 +79,20 @@ void main() {
     expect(find.byKey(const Key('rectangle_by_measures')), findsNothing);
     expect(find.text('Vértice en el robot'), findsOneWidget);
     expect(find.text('Tocá el mapa para agregar puntos'), findsOneWidget);
+    await _unmount(tester);
+  });
+
+  testWidgets('the fence polygon is filled pink at about 20 % opacity', (tester) async {
+    final fence = await _pump(tester, null);
+    fence.addPoint(_corner);
+    fence.addPoint(localToLatLng(0, 20, _corner.latitude, _corner.longitude));
+    fence.addPoint(localToLatLng(10, 20, _corner.latitude, _corner.longitude));
+    await tester.pump();
+    final polygon = tester.widget<PolygonLayer>(find.byType(PolygonLayer)).polygons.single;
+    expect(polygon.isFilled, isTrue);
+    expect(polygon.color.toARGB32() & 0x00FFFFFF, 0xE91D8C);
+    expect(polygon.color.a, closeTo(0.2, 0.01));
+    expect(RoboColors.primary.toARGB32() & 0x00FFFFFF, 0xE91D8C);
     await _unmount(tester);
   });
 

@@ -126,8 +126,9 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                           polygons: [
                             Polygon(
                               points: geofence.points,
+                              isFilled: true,
                               color: RoboColors.primary
-                                  .withValues(alpha: 0.35),
+                                  .withValues(alpha: 0.2),
                               borderColor: (geofenceBreach || badShape)
                                   ? RoboColors.error
                                   : RoboColors.primary,
