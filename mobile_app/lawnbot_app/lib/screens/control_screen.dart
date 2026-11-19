@@ -7,6 +7,7 @@ import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
 import '../utils/mode_labels.dart';
 import '../widgets/joystick_widget.dart';
+import '../widgets/mode_buttons.dart';
 import '../widgets/robo_bottom_nav.dart';
 import '../widgets/robo_top_bar.dart';
 import '../widgets/robot_marker.dart';
@@ -35,15 +36,6 @@ class _ControlScreenState extends State<ControlScreen> {
   final MapController _mapController = MapController();
   bool _followRobot = true;
 
-  void _toggleAutonomous(bool isAutonomous) {
-    final connection = context.read<ConnectionProvider>();
-    if (isAutonomous) {
-      connection.setMode('stop');
-    } else {
-      connection.setMode('auto_parallel');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final robotState = context.watch<RobotStateProvider>();
@@ -52,7 +44,7 @@ class _ControlScreenState extends State<ControlScreen> {
     final center = robotPos != null
         ? LatLng(robotPos.lat, robotPos.lng)
         : _defaultCenter;
-    final isAutonomous = status.isAutonomous;
+    final manual = isManualMode(status.mode);
     final isConnected = context.watch<ConnectionProvider>().isConnected;
 
     if (_followRobot && robotPos != null) {
@@ -216,9 +208,24 @@ class _ControlScreenState extends State<ControlScreen> {
                 const SizedBox(height: 8),
                 const SpeedLimitSelector(),
                 const SizedBox(height: 6),
-                const SizedBox(
+                SizedBox(
                   height: 156,
-                  child: Center(child: JoystickWidget()),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Center(child: JoystickWidget(modeEnabled: manual)),
+                      if (!manual)
+                        const Text(
+                          'Elegí Manual para mover el robot',
+                          key: Key('joystick_hint'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: RoboColors.textSecondary,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -226,24 +233,9 @@ class _ControlScreenState extends State<ControlScreen> {
         ),
         // Fixed outside any scroll view so it's always reachable without
         // scrolling, regardless of how tall the content above ends up being.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => _toggleAutonomous(isAutonomous),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isAutonomous
-                    ? RoboColors.error
-                    : RoboColors.primary,
-              ),
-              child: Text(
-                isAutonomous
-                    ? 'Detener modo autónomo'
-                    : 'Iniciar modo autónomo',
-              ),
-            ),
-          ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 10, 20, 14),
+          child: ModeButtons(),
         ),
       ],
     );

@@ -40,7 +40,11 @@ class JoystickWidget extends StatefulWidget {
   /// Tests only: receives (topic, payload) instead of MqttService.publish.
   final void Function(String topic, String payload)? publishOverride;
 
-  const JoystickWidget({super.key, this.publishOverride});
+  /// False when the robot is not in manual mode: the stick is gray and ignores
+  /// touches (the bridge would drop robot/cmd/move anyway).
+  final bool modeEnabled;
+
+  const JoystickWidget({super.key, this.publishOverride, this.modeEnabled = true});
 
   @override
   State<JoystickWidget> createState() => _JoystickWidgetState();
@@ -91,7 +95,8 @@ class _JoystickWidgetState extends State<JoystickWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final enabled = context.watch<ConnectionProvider>().isConnected;
+    final enabled =
+        context.watch<ConnectionProvider>().isConnected && widget.modeEnabled;
 
     return Opacity(
       opacity: enabled ? 1.0 : 0.4,
