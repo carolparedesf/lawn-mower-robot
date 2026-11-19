@@ -712,9 +712,9 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   (≈ 6,7 Hz) mientras está presionado. El joystick llama a su `listener` cada 100 ms (`period` por defecto de
   `flutter_joystick` 0.1.0, también con el stick quieto) y la app publica con un retardo de 50 ms: ≈ 10 Hz.
   Ambos quedan bien por debajo de los 0,5 s de `twist_mux`, `safety_gate` y del watchdog del firmware.
-- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
+- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
   `sudo systemctl restart bridge.service`. Si falta un auxiliar, `bridge.py` **no arranca** y dice cuál falta (`journalctl -u bridge.service -n 20`).
   ```bash
-  scp bridge/bridge.py bridge/actuator_relay.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
+  scp bridge/bridge.py bridge/actuator_relay.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
   ```
   Hasta entonces la Pi sigue con el bridge viejo.

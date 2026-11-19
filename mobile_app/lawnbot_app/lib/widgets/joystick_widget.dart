@@ -15,25 +15,35 @@ const double joystickStickSize = 37.5;
 /// Joystick deflection below this on both axes is "stop" (dead zone).
 const double joystickDeadZone = 0.2;
 
+/// Turning (left/right) is sized in rad/s, not by the speed-limit level: at
+/// least [turnMinRadS] at any level (below that the motors do not start: 0.3
+/// rad/s is only ~0.05 m/s per wheel), up to [turnMaxRadS] on Rápido.
+const double turnMinRadS = 0.8;
+
+/// Angular speed of speed 1.0 in the bridge (bridge/move_mapping.py,
+/// MAX_ANGULAR_RADS). `speed` of a turn = rad/s / this, so it stays 0..1.
+const double turnMaxRadS = 1.5;
+
 /// What goes into robot/cmd/move for a stick position (x, y in -1..1, y < 0 is
-/// forward). The dominant axis picks the direction; its deflection, clamped to
-/// 0..1 and multiplied by the speed-limit [factor] (0.3 / 0.6 / 1.0), is the
-/// `speed`. Inside the dead zone it is ('stop', 0).
+/// forward). The dominant axis picks the direction. Forward/back: `speed` is
+/// the deflection, clamped to 0..1, times the speed-limit [factor]
+/// (0.3 / 0.6 / 1.0). Left/right: the angular speed is
+/// max([minTurnRadS], deflection * factor * [turnMaxRadS]) and `speed` is that
+/// over [turnMaxRadS]. Inside the dead zone it is ('stop', 0).
 ({String dir, double speed}) joystickCommand(double x, double y,
-    {double factor = 1.0}) {
+    {double factor = 1.0, double minTurnRadS = turnMinRadS}) {
   if (x.abs() < joystickDeadZone && y.abs() < joystickDeadZone) {
     return (dir: 'stop', speed: 0.0);
   }
-  final String dir;
-  final double raw;
   if (y.abs() >= x.abs()) {
-    dir = y < 0 ? 'fwd' : 'back';
-    raw = y.abs();
-  } else {
-    dir = x > 0 ? 'right' : 'left';
-    raw = x.abs();
+    return (
+      dir: y < 0 ? 'fwd' : 'back',
+      speed: y.abs().clamp(0.0, 1.0) * factor,
+    );
   }
-  return (dir: dir, speed: raw.clamp(0.0, 1.0) * factor);
+  final omega = (x.abs().clamp(0.0, 1.0) * factor * turnMaxRadS)
+      .clamp(minTurnRadS, turnMaxRadS);
+  return (dir: x > 0 ? 'right' : 'left', speed: omega / turnMaxRadS);
 }
 
 class JoystickWidget extends StatefulWidget {
