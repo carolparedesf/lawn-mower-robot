@@ -82,6 +82,52 @@ void main() {
     expect(limit.factor, 1.0);
   });
 
+  group('turning is sized in rad/s: the level scales only linear speed', () {
+    double omega(({String dir, double speed}) c) => c.speed * turnMaxRadS;
+
+    test('constants: minimum 0.8 rad/s, 1.5 rad/s at speed 1 (as in the bridge)', () {
+      expect(turnMinRadS, 0.8);
+      expect(turnMaxRadS, 1.5);
+    });
+
+    test('Lento and Medio never turn below 0.8 rad/s, even at a small deflection', () {
+      for (final level in [SpeedLevel.slow, SpeedLevel.medium, SpeedLevel.fast]) {
+        for (final x in [0.2, 0.5, 1.0]) {
+          final c = joystickCommand(x, 0.0, factor: level.factor);
+          expect(omega(c), greaterThanOrEqualTo(0.8 - 1e-9), reason: '${level.name} x=$x');
+        }
+      }
+      expect(omega(joystickCommand(1.0, 0.0, factor: SpeedLevel.slow.factor)), closeTo(0.8, 1e-9));
+      expect(omega(joystickCommand(-1.0, 0.0, factor: SpeedLevel.slow.factor)), closeTo(0.8, 1e-9));
+    });
+
+    test('Medio gains with the deflection up to 0.9 rad/s; Rápido reaches 1.5', () {
+      expect(omega(joystickCommand(1.0, 0.0, factor: SpeedLevel.medium.factor)), closeTo(0.9, 1e-9));
+      expect(omega(joystickCommand(1.0, 0.0, factor: SpeedLevel.fast.factor)), closeTo(1.5, 1e-9));
+      expect(omega(joystickCommand(0.7, 0.0, factor: SpeedLevel.fast.factor)), closeTo(1.05, 1e-9));
+    });
+
+    test('a turn is never above 1.5 rad/s and speed stays in 0..1', () {
+      final c = joystickCommand(3.0, 0.0);
+      expect(c.speed, 1.0);
+      expect(joystickCommand(-3.0, 0.0, factor: 1.0).dir, 'left');
+    });
+
+    test('the minimum is a parameter', () {
+      expect(omega(joystickCommand(1.0, 0.0, factor: 0.3, minTurnRadS: 1.0)), closeTo(1.0, 1e-9));
+    });
+
+    test('the in-place turn at Lento moves each wheel above 0.14 m/s (was 0.053)', () {
+      final c = joystickCommand(1.0, 0.0, factor: SpeedLevel.slow.factor);
+      expect(omega(c) * 0.355 / 2, greaterThan(0.14));
+    });
+
+    test('forward/back are still scaled by the level only', () {
+      expect(joystickCommand(0.0, -1.0, factor: 0.3).speed, closeTo(0.3, 1e-12));
+      expect(joystickCommand(0.0, 1.0, factor: 0.6).speed, closeTo(0.6, 1e-12));
+    });
+  });
+
   testWidgets('robot/cmd/move carries the scaled speed, and zero on release', (tester) async {
     final limit = SpeedLimitProvider();
     final sent = <(String, Map<String, dynamic>)>[];

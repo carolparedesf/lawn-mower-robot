@@ -44,10 +44,11 @@ except ImportError:                                 # en simulacion (portatil) p
 
 try:
     from actuator_relay import ActuatorRelay, mode_allows_actuators
+    from move_mapping import twist_from_dir
     from status_alert import pick_alert
 except ImportError as exc:
-    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py y status_alert.py juntos "
-             "a ~/pi/ (scp bridge/{bridge,actuator_relay,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
+    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, move_mapping.py y status_alert.py juntos "
+             "a ~/pi/ (scp bridge/{bridge,actuator_relay,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
 
 BROKER = "localhost"
 
@@ -198,19 +199,8 @@ class RobotBridge(Node):
         self.send_twist(0.0, 0.0)
 
     def send_twist_from_dir(self, direction, speed):
-        speed = max(0.0, min(1.0, float(speed)))
-        # Convertir speed (0-1) a m/s (max 0.5 m/s)
-        v = speed * 0.5
-        if direction == "fwd":
-            self.send_twist(v, 0.0)
-        elif direction == "back":
-            self.send_twist(-v, 0.0)
-        elif direction == "left":
-            self.send_twist(0.0, v * 2)
-        elif direction == "right":
-            self.send_twist(0.0, -v * 2)
-        else:
-            self.send_stop()
+        # speed 0..1 -> m/s y rad/s (escalas en move_mapping.py; el giro lo dimensiona la app)
+        self.send_twist(*twist_from_dir(direction, speed))
 
     def send_estop(self, active: bool):
         msg = Bool()
