@@ -53,6 +53,7 @@ class RoboTopBar extends StatelessWidget {
                 _ConnectionChip(
                   connected: connection.isConnected,
                   connecting: connection.isConnecting,
+                  reconnecting: connection.isReconnecting,
                 ),
                 IconButton(
                   key: const Key('settings_button'),
@@ -131,18 +132,24 @@ class RoboTopBar extends StatelessWidget {
   }
 }
 
-/// White chip with a colored dot: green connected, orange connecting, red not.
+/// White chip with a colored dot: green connected, orange connecting or
+/// reconnecting, red not.
 class _ConnectionChip extends StatelessWidget {
   final bool connected;
   final bool connecting;
+  final bool reconnecting;
 
-  const _ConnectionChip({required this.connected, required this.connecting});
+  const _ConnectionChip({
+    required this.connected,
+    required this.connecting,
+    required this.reconnecting,
+  });
 
   @override
   Widget build(BuildContext context) {
     final color = connected
         ? RoboColors.success
-        : connecting
+        : (connecting || reconnecting)
         ? RoboColors.warning
         : RoboColors.error;
     return Container(
@@ -165,6 +172,8 @@ class _ConnectionChip extends StatelessWidget {
           Text(
             connected
                 ? 'Conectado'
+                : reconnecting
+                ? 'Reconectando...'
                 : connecting
                 ? 'Conectando...'
                 : 'Desconectado',

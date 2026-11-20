@@ -14,42 +14,114 @@ String modePayload(String mode) => jsonEncode({'mode': mode});
 /// Autonomous mode started by the "Autónomo" button until the user picks another.
 const String defaultAutoMode = 'auto_parallel';
 
+/// Time between reconnection attempts after the link drops.
+const Duration reconnectInterval = Duration(seconds: 2);
+
 class ConnectionProvider extends ChangeNotifier {
   String _selectedAutoMode = defaultAutoMode;
   bool _connected = false;
   bool _connecting = false;
   String _broker = MqttConfig.broker;
 
+  // Automatic reconnection: after a drop (never after the user's own
+  // disconnect() or if there was no connection before), retry every
+  // [retryEvery] with no user action, until it comes back.
+  final Future<bool> Function(String broker) _connector;
+  final void Function() _requestState;
+  /// Time between attempts (2 s; tests shorten it).
+  final Duration retryEvery;
+  Timer? _retryTimer;
+  bool _everConnected = false;
+  bool _userDisconnected = false;
+  bool _reconnecting = false;
+  bool _attemptRunning = false;
+
   /// Last autonomous mode chosen in the "Modo" tab (what "Autónomo" starts).
   String get selectedAutoMode => _selectedAutoMode;
 
   bool get isConnected => _connected;
   bool get isConnecting => _connecting;
+
+  /// True while the app retries by itself after a dropped connection (the chip
+  /// shows "Reconectando...").
+  bool get isReconnecting => _reconnecting;
   String get broker => _broker;
 
   StreamSubscription<bool>? _sub;
 
-  ConnectionProvider() {
-    _sub = MqttService.instance.connectionStream.listen((connected) {
-      _connected = connected;
-      notifyListeners();
-    });
+  /// The optional parameters are for tests (a fake link and a short interval).
+  ConnectionProvider({
+    Stream<bool>? connectionStream,
+    Future<bool> Function(String broker)? connector,
+    void Function()? requestState,
+    this.retryEvery = reconnectInterval,
+  })  : _connector = connector ?? MqttService.instance.connect,
+        _requestState = requestState ?? MqttService.instance.requestState {
+    _sub = (connectionStream ?? MqttService.instance.connectionStream)
+        .listen(_onLinkChanged);
+  }
+
+  void _onLinkChanged(bool connected) {
+    _connected = connected;
+    if (connected) {
+      _everConnected = true;
+    } else if (_everConnected && !_userDisconnected) {
+      _startRetrying();
+    }
+    notifyListeners();
   }
 
   Future<void> connect({String? broker}) async {
     if (_connecting) return;
     if (broker != null) _broker = broker;
+    _userDisconnected = false;
+    _stopRetrying();
     _connecting = true;
     notifyListeners();
 
-    final ok = await MqttService.instance.connect(_broker);
+    final ok = await _connector(_broker);
     _connected = ok;
+    if (ok) {
+      _everConnected = true;
+      _requestState();
+    }
     _connecting = false;
     notifyListeners();
   }
 
   void disconnect() {
+    _userDisconnected = true;
+    _stopRetrying();
     MqttService.instance.disconnect();
+    notifyListeners();
+  }
+
+  void _startRetrying() {
+    if (_retryTimer != null) return;
+    _reconnecting = true;
+    _retryTimer = Timer.periodic(retryEvery, (_) => _retryOnce());
+  }
+
+  void _stopRetrying() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _reconnecting = false;
+  }
+
+  /// One attempt; attempts never overlap (a slow one skips the next ticks).
+  Future<void> _retryOnce() async {
+    if (_attemptRunning || _connecting || _connected) return;
+    _attemptRunning = true;
+    final ok = await _connector(_broker);
+    _attemptRunning = false;
+    if (_retryTimer == null) return; // stopped meanwhile (user / dispose)
+    if (ok) {
+      _stopRetrying();
+      _connected = true;
+      // The session is clean: ask the robot for its state again.
+      _requestState();
+      notifyListeners();
+    }
   }
 
   /// STOP: speed 0 on robot/cmd/move (same format as the joystick) and the
@@ -83,6 +155,8 @@ class ConnectionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
     _sub?.cancel();
     super.dispose();
   }

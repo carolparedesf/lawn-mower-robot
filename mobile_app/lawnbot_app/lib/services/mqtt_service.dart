@@ -11,7 +11,7 @@ class MqttService {
   MqttService._();
   static final MqttService instance = MqttService._();
 
-  late MqttServerClient _client;
+  MqttServerClient? _client;
 
   final _positionController = StreamController<RobotPosition>.broadcast();
   final _statusController = StreamController<RobotStatus>.broadcast();
@@ -26,42 +26,66 @@ class MqttService {
   bool _connected = false;
   bool get isConnected => _connected;
 
+  /// Connects (a new client each time, so it also serves to reconnect). It does
+  /// NOT subscribe: call [requestState] after it returns true.
   Future<bool> connect(String broker) async {
-    _client = MqttServerClient(broker, MqttConfig.clientId);
-    _client.port = MqttConfig.port;
-    _client.keepAlivePeriod = 20;
-    _client.onDisconnected = _onDisconnected;
-    _client.onConnected = _onConnected;
-    _client.logging(on: false);
+    // Drop the previous client's callbacks: a late onDisconnected from it must
+    // not flip the state of the new connection.
+    final old = _client;
+    if (old != null) {
+      old.onDisconnected = null;
+      old.onConnected = null;
+      old.disconnect();
+    }
+
+    final client = MqttServerClient(broker, MqttConfig.clientId);
+    _client = client;
+    client.port = MqttConfig.port;
+    // Short keep-alive: a cut link is noticed in ~10 s, not ~30 s.
+    client.keepAlivePeriod = 8;
+    client.onDisconnected = () {
+      if (identical(client, _client)) _onDisconnected();
+    };
+    client.onConnected = () {
+      if (identical(client, _client)) _onConnected();
+    };
+    client.logging(on: false);
 
     final connMsg = MqttConnectMessage()
         .withClientIdentifier(MqttConfig.clientId)
         .startClean()
         .withWillQos(MqttQos.atLeastOnce);
-    _client.connectionMessage = connMsg;
+    client.connectionMessage = connMsg;
 
     try {
-      await _client.connect();
+      await client.connect();
     } catch (_) {
-      _client.disconnect();
+      client.disconnect();
       return false;
     }
 
-    if (_client.connectionStatus?.state != MqttConnectionState.connected) {
+    if (client.connectionStatus?.state != MqttConnectionState.connected) {
       return false;
     }
 
+    client.updates!.listen(_onMessage);
+    return true;
+  }
+
+  /// Asks the robot for its state again: (re)subscribes to its topics. The
+  /// broker re-sends the retained map right away; the status arrives with the
+  /// bridge's next periodic robot/status. Must run after every (re)connect:
+  /// the session is clean, so the broker forgets the subscriptions.
+  void requestState() {
+    if (!_connected) return;
     _subscribe(MqttConfig.topicPosition, MqttQos.atMostOnce);
     _subscribe(MqttConfig.topicStatus, MqttQos.atLeastOnce);
     // Retained by the broker: the last map arrives right after subscribing.
     _subscribe(MqttConfig.topicMap, MqttQos.atMostOnce);
-
-    _client.updates!.listen(_onMessage);
-    return true;
   }
 
   void _subscribe(String topic, MqttQos qos) {
-    _client.subscribe(topic, qos);
+    _client?.subscribe(topic, qos);
   }
 
   void _onConnected() {
@@ -95,11 +119,11 @@ class MqttService {
   void publish(String topic, String payload, {MqttQos qos = MqttQos.atMostOnce}) {
     if (!_connected) return;
     final builder = MqttClientPayloadBuilder()..addString(payload);
-    _client.publishMessage(topic, qos, builder.payload!);
+    _client?.publishMessage(topic, qos, builder.payload!);
   }
 
   void disconnect() {
-    _client.disconnect();
+    _client?.disconnect();
   }
 
   void dispose() {
