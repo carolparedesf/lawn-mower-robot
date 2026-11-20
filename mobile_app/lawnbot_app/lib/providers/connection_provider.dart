@@ -11,6 +11,9 @@ String stopMovePayload() => jsonEncode({'dir': 'stop', 'speed': 0.0});
 /// Payload of robot/cmd/mode (the bridge reads the "mode" key).
 String modePayload(String mode) => jsonEncode({'mode': mode});
 
+/// Payload of robot/cmd/estop. The bridge only accepts the release.
+String estopReleasePayload() => jsonEncode({'active': false});
+
 /// Autonomous mode started by the "Autónomo" button until the user picks another.
 const String defaultAutoMode = 'auto_parallel';
 
@@ -28,6 +31,7 @@ class ConnectionProvider extends ChangeNotifier {
   // [retryEvery] with no user action, until it comes back.
   final Future<bool> Function(String broker) _connector;
   final void Function() _requestState;
+  final void Function(String topic, String payload, {MqttQos qos}) _publish;
   /// Time between attempts (2 s; tests shorten it).
   final Duration retryEvery;
   Timer? _retryTimer;
@@ -54,9 +58,11 @@ class ConnectionProvider extends ChangeNotifier {
     Stream<bool>? connectionStream,
     Future<bool> Function(String broker)? connector,
     void Function()? requestState,
+    void Function(String topic, String payload, {MqttQos qos})? publisher,
     this.retryEvery = reconnectInterval,
   })  : _connector = connector ?? MqttService.instance.connect,
-        _requestState = requestState ?? MqttService.instance.requestState {
+        _requestState = requestState ?? MqttService.instance.requestState,
+        _publish = publisher ?? MqttService.instance.publish {
     _sub = (connectionStream ?? MqttService.instance.connectionStream)
         .listen(_onLinkChanged);
   }
@@ -132,6 +138,17 @@ class ConnectionProvider extends ChangeNotifier {
       stopMovePayload(),
     );
     setMode('stop');
+  }
+
+  /// Releases the robot's e-stop (robot/cmd/estop, QoS 1). The bridge leaves
+  /// the mode in "stop": the user taps Manual afterwards, it does not go back
+  /// to manual by itself.
+  void releaseEstop() {
+    _publish(
+      MqttConfig.topicCmdEstop,
+      estopReleasePayload(),
+      qos: MqttQos.atLeastOnce,
+    );
   }
 
   /// Starts the autonomous mode picked in the "Modo" tab.

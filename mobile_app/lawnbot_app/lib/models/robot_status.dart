@@ -4,6 +4,11 @@ class RobotStatus {
   /// (the bridge omits the key if the battery sensor is not connected).
   final int? battery;
   final String alert;
+
+  /// The bridge remembers an e-stop (the robot was lifted, or someone sent
+  /// /estop true) until it is released, and reports it in robot/status "estop".
+  /// Unlike the "lifted" alert (about 5 s) it lasts while the robot stays stopped.
+  final bool estop;
   final bool blade;
   final bool trimmer;
   final bool charging;
@@ -31,6 +36,7 @@ class RobotStatus {
     required this.mode,
     required this.battery,
     required this.alert,
+    this.estop = false,
     this.blade = false,
     this.trimmer = false,
     this.charging = false,
@@ -46,6 +52,7 @@ class RobotStatus {
       mode: json['mode'] as String? ?? 'idle',
       battery: (json['battery'] as num?)?.toInt(),
       alert: json['alert'] as String? ?? 'none',
+      estop: json['estop'] as bool? ?? false,
       blade: json['blade'] as bool? ?? false,
       trimmer: json['trimmer'] as bool? ?? false,
       charging: json['charging'] as bool? ?? false,
@@ -61,6 +68,7 @@ class RobotStatus {
         'mode': mode,
         if (battery != null) 'battery': battery,
         'alert': alert,
+        'estop': estop,
         'blade': blade,
         'trimmer': trimmer,
         'charging': charging,
@@ -70,6 +78,12 @@ class RobotStatus {
         if (bladeStatus != null) 'blade_status': bladeStatus,
         if (geofenceStatus != null) 'geofence': geofenceStatus,
       };
+
+  /// The "Liberar parada de emergencia" button shows while this is true: the
+  /// bridge reports an e-stop, or the alert says so (`estop`, or the one-shot
+  /// `lifted` event, which the bridge also remembers in [estop]).
+  bool get isEmergencyStopped =>
+      estop || alert == 'estop' || alert == 'lifted';
 
   bool get hasGeofenceBreach => alert == 'geofence_breach';
 
