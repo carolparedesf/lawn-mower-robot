@@ -5,6 +5,8 @@ MQTT -> ROS:
   robot/cmd/mode     -> /robot_mode      (String, transient_local; se republica cada 1 s: heartbeat)
   robot/cmd/move     -> /cmd_vel_manual  (Twist, solo en modo manual)
   robot/cmd/geofence -> /geofence_raw    (String con el JSON recibido, transient_local)
+  robot/cmd/estop    -> /estop (Bool false; SOLO liberacion, payload {"active": false}; ver estop_latch.py). Al liberar el modo queda
+                        en "stop": el usuario vuelve a elegir Manual
   robot/cmd/actuator -> /cutter/enable, /trimmer/enable, /blade/force_cut (Bool, 4 Hz mientras se mantenga;
                         payload {"blade","trimmer","charging"} + "force_cut" opcional; ver actuator_relay.py)
 ROS -> MQTT:
@@ -14,6 +16,8 @@ ROS -> MQTT:
   robot/position     <- gpsd (hilo propio, sin cambios). Solo en simulacion, con --sim-position o LAWNBOT_SIM_POSITION=1:
                         la TF map->base_footprint convertida a lat/lng con el datum del geofence_node (sim_position.py);
                         con esa opcion no se conecta a gpsd
+  robot/status.estop <- true mientras se recuerde un e-stop: un 'lifted' (/robot/events) o un /estop true, hasta que se
+                        publique /estop false (estop_latch.py)
   robot/status.alert <- tambien /robot/events (lifted, low_battery...) por unos segundos si no hay alerta de seguridad
   robot/map          <- /coverage/map (pasadas por celda y obstaculos; JSON, retenido)
 
@@ -44,11 +48,12 @@ except ImportError:                                 # en simulacion (portatil) p
 
 try:
     from actuator_relay import ActuatorRelay, mode_allows_actuators
+    from estop_latch import EstopLatch, is_release_command
     from move_mapping import twist_from_dir
     from status_alert import pick_alert
 except ImportError as exc:
-    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, move_mapping.py y status_alert.py juntos "
-             "a ~/pi/ (scp bridge/{bridge,actuator_relay,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
+    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, estop_latch.py, move_mapping.py y status_alert.py "
+             "juntos a ~/pi/ (scp bridge/{bridge,actuator_relay,estop_latch,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
 
 BROKER = "localhost"
 
@@ -90,6 +95,7 @@ class RobotBridge(Node):
                                  qos_profile_sensor_data)
         self.create_subscription(String, 'blade/status', self.on_blade_status, 10)
         self.create_subscription(String, 'robot/events', self.on_robot_event, 10)
+        self.create_subscription(Bool, 'estop', self.on_estop, 10)
         self.create_subscription(String, 'coverage/map', self.on_coverage_map, 10)
         self.create_subscription(Float32, 'cutter/cmd', lambda m: self.on_motor_cmd('cutter', m), 10)
         self.create_subscription(Float32, 'trimmer/cmd', lambda m: self.on_motor_cmd('trimmer', m), 10)
@@ -100,6 +106,7 @@ class RobotBridge(Node):
         self.active_mode_time = 0.0
         self.alert = "none"
         self.event = None
+        self.estop_latch = EstopLatch()         # e-stop recordado hasta /estop false (arranca sin e-stop)
         self.blade_status = None
         self.blade_status_time = 0.0
         self.event_time = 0.0
@@ -153,6 +160,7 @@ class RobotBridge(Node):
         client.subscribe("robot/cmd/mode", qos=1)
         client.subscribe("robot/cmd/geofence", qos=1)
         client.subscribe("robot/cmd/actuator", qos=1)
+        client.subscribe("robot/cmd/estop", qos=1)
 
     def on_message(self, client, userdata, msg):
         try:
@@ -178,6 +186,12 @@ class RobotBridge(Node):
                 self.get_logger().info("Pedido de actuadores ignorado (modo idle/stop o sin heartbeat): todo apagado")
             self.publish_enables()
             self.publish_status()
+
+        elif msg.topic == "robot/cmd/estop":
+            if is_release_command(payload):
+                self.release_estop()
+            else:
+                self.get_logger().info("robot/cmd/estop ignorado: solo se acepta {\"active\": false}")
 
         elif msg.topic == "robot/cmd/geofence":
             self.geofence_points = payload.get("points", [])
@@ -206,6 +220,19 @@ class RobotBridge(Node):
         msg = Bool()
         msg.data = active
         self.estop_pub.publish(msg)
+
+    def release_estop(self):
+        """Libera el e-stop (robot/cmd/estop). El modo queda en "stop": el robot NO vuelve solo a manual, el usuario
+        elige Manual despues. El modo se publica antes que /estop false para que nunca haya un instante con el e-stop
+        liberado y el modo anterior vigente."""
+        self.get_logger().info("Liberacion de e-stop pedida: modo stop y /estop false")
+        self.requested_mode = "stop"
+        self.send_stop()
+        self.publish_mode()
+        self.send_estop(False)
+        self.estop_latch.release()
+        self.event = None                       # el 'lifted' viejo no debe seguir mostrandose como alerta
+        self.publish_status()
 
     # ── ROS2 subscribers -> robot/status ──────────────────────
 
@@ -250,7 +277,15 @@ class RobotBridge(Node):
 
     def on_robot_event(self, msg):
         self.event, self.event_time = msg.data, time.monotonic()
+        self.estop_latch.on_event(msg.data)
         self.publish_status()
+
+    def on_estop(self, msg):
+        """/estop de cualquiera (tambien el nuestro al liberar): true se recuerda, false lo libera."""
+        changed = bool(msg.data) != self.estop_latch.active
+        self.estop_latch.on_estop(msg.data)
+        if changed:
+            self.publish_status()
 
     def on_battery(self, msg):
         pct = msg.percentage * 100.0
@@ -275,6 +310,7 @@ class RobotBridge(Node):
         if self.battery_pct is not None and now - self.battery_time <= BATTERY_STALE_S:
             status["battery"] = int(round(self.battery_pct))
         status["alert"] = pick_alert(self.alert, self.event, now - self.event_time)
+        status["estop"] = self.estop_latch.active
         # Estado de los actuadores: "blade"/"trimmer" son lo pedido y aceptado (la app arma su proximo comando a partir
         # de ellos); "*_running" es si el motor esta corriendo de verdad (puede estar apagado por una condicion)
         blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())

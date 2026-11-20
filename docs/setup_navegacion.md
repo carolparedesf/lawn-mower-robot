@@ -595,6 +595,9 @@ Payload **real** de la app (`robot/cmd/actuator`, QoS 1, uno por cada cambio; la
 - **`robot/status`** (contrato intacto, claves nuevas): `blade` y `trimmer` = lo pedido y aceptado (la app arma su próximo comando a partir de ellos, así que tienen que estar), `force_cut`,
   y `blade_running` / `trimmer_running` = el motor corre de verdad (`/cutter/cmd` o `/trimmer/cmd` > 0 y vigente; puede estar en `false` con el pedido en `true` si una condición lo apaga).
   `blade_status` (clave nueva, opcional): el texto de `/blade/status` (p. ej. `cutter=OFF(sin_pasto) | trimmer=ON duty=0.30`) para que la app diga **por qué** un motor pedido no corre; se omite si tiene más de 3 s.
+- **E-stop** (clave nueva `estop`, siempre presente, y topic nuevo `robot/cmd/estop`): el bridge recuerda un `lifted` (`/robot/events`) o cualquier `/estop true` hasta que se publique `/estop false` y lo informa en `robot/status.estop`
+  (el `alert: lifted` dura solo 5 s, pero el firmware sigue frenado). La app libera con `robot/cmd/estop` `{"active": false}` (QoS 1; **solo liberación**, cualquier otro payload se ignora): el bridge publica el modo `stop`, un
+  Twist cero y `/estop false`, en ese orden, así que el robot **no vuelve solo a manual**. Si el bridge se reinicia, la memoria arranca limpia (`estop: false`) aunque el robot siga frenado: se recupera con el próximo `lifted`.
 
 ### coverage_map (`config/coverage_map.yaml`)
 
@@ -712,9 +715,9 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   (≈ 6,7 Hz) mientras está presionado. El joystick llama a su `listener` cada 100 ms (`period` por defecto de
   `flutter_joystick` 0.1.0, también con el stick quieto) y la app publica con un retardo de 50 ms: ≈ 10 Hz.
   Ambos quedan bien por debajo de los 0,5 s de `twist_mux`, `safety_gate` y del watchdog del firmware.
-- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
+- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `estop_latch.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
   `sudo systemctl restart bridge.service`. Si falta un auxiliar, `bridge.py` **no arranca** y dice cuál falta (`journalctl -u bridge.service -n 20`).
   ```bash
-  scp bridge/bridge.py bridge/actuator_relay.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
+  scp bridge/bridge.py bridge/actuator_relay.py bridge/estop_latch.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
   ```
   Hasta entonces la Pi sigue con el bridge viejo.
