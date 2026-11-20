@@ -7,6 +7,7 @@ class MqttConfig {
   static const String topicCmdMode = 'robot/cmd/mode';
   static const String topicCmdGeofence = 'robot/cmd/geofence';
   static const String topicCmdActuator = 'robot/cmd/actuator';
+  static const String topicCmdEstop = 'robot/cmd/estop';
 
   static const String topicPosition = 'robot/position';
   static const String topicStatus = 'robot/status';

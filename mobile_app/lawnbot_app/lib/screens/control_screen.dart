@@ -6,6 +6,7 @@ import '../providers/connection_provider.dart';
 import '../providers/robot_state_provider.dart';
 import '../theme/robo_theme.dart';
 import '../utils/mode_labels.dart';
+import '../widgets/estop_release_button.dart';
 import '../widgets/joystick_widget.dart';
 import '../widgets/mode_buttons.dart';
 import '../widgets/robo_bottom_nav.dart';
@@ -235,7 +236,13 @@ class _ControlScreenState extends State<ControlScreen> {
         // scrolling, regardless of how tall the content above ends up being.
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 10, 20, 14),
-          child: ModeButtons(),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              EstopReleaseButton(),
+              ModeButtons(),
+            ],
+          ),
         ),
       ],
     );
