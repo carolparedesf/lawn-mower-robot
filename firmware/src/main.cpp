@@ -90,9 +90,7 @@ BatteryManager battery(0.002f, 20.0f);
 // PWM 0 e integral 0. Vuelve a habilitarse al superar BAT_RUN_MIN_V + hist.
 const float   BAT_RUN_MIN_V        = 15.0f;   // V (parámetro)
 const float   BAT_RUN_HYST_V       = 1.0f;    // V, evita oscilar en el umbral
-const unsigned long BAT_RETRY_MS   = 2000;    // reintento de begin() si no respondió
 bool          battery_ok           = false;
-unsigned long last_bat_retry_ms    = 0;
 
 // ── Display ──────────────────────────────────────────────────
 DisplayManager display;
@@ -225,12 +223,14 @@ void timer_battery_cb(rcl_timer_t* timer, int64_t)
     builtin_interfaces__msg__Time now = get_ros_time();
     
     msg_battery.header.stamp    = now;
-    msg_battery.voltage         = battery.getVoltage();
-    msg_battery.current         = battery.getCurrent();
-    msg_battery.percentage      = battery.getPercent() / 100.0f;
+    // Sin dato del INA228: NAN y present=false (el bridge lo ignora)
+    const bool bat_ok           = battery.isReady();
+    msg_battery.voltage         = bat_ok ? battery.getVoltage() : NAN;
+    msg_battery.current         = bat_ok ? battery.getCurrent() : NAN;
+    msg_battery.percentage      = bat_ok ? battery.getPercent() / 100.0f : NAN;
     msg_battery.power_supply_status         = 
         sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_DISCHARGING;
-    msg_battery.present         = true;
+    msg_battery.present         = bat_ok;
     RCSOFTCHECK(rcl_publish(&pub_battery, &msg_battery, NULL));
 }
 
@@ -513,12 +513,8 @@ void loop()
         }
         unsigned long t_start = micros();
         // Batería primero: decide si se puede correr el PID en este ciclo.
-        // Si el INA228 no estaba al arrancar (p.ej. se alimenta con la batería
-        // apagada), reintentar begin() hasta que responda.
-        if (!battery.isReady() && now - last_bat_retry_ms >= BAT_RETRY_MS) {
-            last_bat_retry_ms = now;
-            battery.begin();
-        }
+        // update() es acotado (lee cada 500 ms, timeout I2C corto) y, si el
+        // INA228 no responde, marca "sin dato" y reintenta cada 2 s por su cuenta.
         battery.update();
         if (!battery.isReady())                                    battery_ok = false;
         else if (battery.getVoltage() >= BAT_RUN_MIN_V + BAT_RUN_HYST_V) battery_ok = true;
