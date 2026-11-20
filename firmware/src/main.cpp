@@ -20,6 +20,8 @@
 #include "BatteryManager.h"
 #include "DisplayManager.h"
 
+#define DOMAIN_ID 42   // ROS_DOMAIN_ID del nodo micro-ROS
+
 #define BUZZER_PIN 2
 
 // ── Variables FSM ────────────────────────────────────────────
@@ -285,8 +287,18 @@ bool create_entities()
 {
     allocator = rcl_get_default_allocator();
 
-    if (rclc_support_init(&support, 0, NULL, &allocator) != RCL_RET_OK)
+    // Init options con ROS_DOMAIN_ID = DOMAIN_ID. rclc_support_fini() las libera.
+    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+    if (rcl_init_options_init(&init_options, allocator) != RCL_RET_OK)
         return false;
+    if (rcl_init_options_set_domain_id(&init_options, DOMAIN_ID) != RCL_RET_OK) {
+        rcl_init_options_fini(&init_options);
+        return false;
+    }
+    if (rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator) != RCL_RET_OK) {
+        rcl_init_options_fini(&init_options);
+        return false;
+    }
     if (rclc_node_init_default(&node, "mow_base_node", "", &support) != RCL_RET_OK)
         return false;
     if (rmw_uros_sync_session(1000) != RCL_RET_OK)
