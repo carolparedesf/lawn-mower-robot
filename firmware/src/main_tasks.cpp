@@ -8,6 +8,8 @@
 #include <Arduino.h>
 
 #include "Motor.h"
+#include "SharedState.h"
+#include "TaskLogic.h"
 
 // ── Motores (mismos pines/canales que main.cpp) ─────────────────────────────
 const float PID_I_TERM_MAX_PWM = 80.0f;
