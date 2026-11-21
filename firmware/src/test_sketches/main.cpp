@@ -8,7 +8,7 @@
 #include <nav_msgs/msg/odometry.h>
 #include <sensor_msgs/msg/range.h>
 #include <std_msgs/msg/bool.h>
-#include <std_msgs/msg/string.h>
+#include <sensor_msgs/msg/battery_state.h>
 #include <rosidl_runtime_c/string_functions.h>
 
 #include "Motor.h"
@@ -17,6 +17,8 @@
 #include "SonarManager.h"
 #include "BumperManager.h"
 #include "BuzzerManager.h"
+#include "BatteryManager.h"
+#include "DisplayManager.h"
 
 #define BUZZER_PIN 2
 
@@ -38,7 +40,7 @@ AgentState agent_state = AgentState::WAITING_AGENT;
 unsigned long last_cmd_ms = 0;
 
 // ── Control loop ─────────────────────────────────────────────
-const int     PERIOD_MS = 20;
+const int     PERIOD_MS = 20; // 50 Hz
 unsigned long last_ctrl = 0;
 float         ctrl_hz   = 0.0f;
 unsigned long ctrl_count = 0;
@@ -69,11 +71,20 @@ DiffDrive robot(motor_der, motor_izq, enc_der, enc_izq, dd_cfg);
 SonarManager sonars(15, 36, 35, 34);
 
 // ── Bumpers ──────────────────────────────────────────────────
-const uint8_t BUMPER_PINS[BUMPER_MAX_SENSORS] = {17, 16, 5, 4, 23};//{4, 5, 16, 17, 23}
-BumperManager bumpers(BUMPER_PINS, 25);
+const uint8_t BUMPER_PINS[BUMPER_MAX_SENSORS] = {17, 16, 5, 4, 23};
+BumperManager bumpers(BUMPER_PINS, 5);
 
 // ── Buzzer ──────────────────────────────────────────────────
 BuzzerManager buzzer(BUZZER_PIN);
+
+// ── Batería ──────────────────────────────────────────────────
+BatteryManager battery(0.002f, 20.0f);
+
+// ── Display ──────────────────────────────────────────────────
+DisplayManager display;
+
+// Estado del sistema para el display - inicia en desconectado
+BuzzerPattern display_state = BuzzerPattern::DISCONNECTED;
 
 // ── micro-ROS - Entidades ───────────────────────────────────
 // Subscribers
@@ -84,19 +95,19 @@ std_msgs__msg__Bool       msg_estop_in;
 // Publisher
 rcl_publisher_t pub_debug_cmd;
 rcl_publisher_t pub_odom;
+rcl_publisher_t pub_battery;
 rcl_publisher_t pub_sonar_l, pub_sonar_c, pub_sonar_r;
 rcl_publisher_t pub_bumper[BUMPER_MAX_SENSORS];
-//rcl_publisher_t pub_status;
 // Mensajes
 geometry_msgs__msg__Twist msg_debug_cmd;
 nav_msgs__msg__Odometry   msg_odom;
+sensor_msgs__msg__BatteryState msg_battery;
 sensor_msgs__msg__Range   msg_sonar[3];
 std_msgs__msg__Bool       msg_bumper[BUMPER_MAX_SENSORS];
-//std_msgs__msg__String     msg_status;
 // Timers separados por frecuencia
 rcl_timer_t timer_odom;     // 50Hz
+rcl_timer_t timer_battery;  // 2Hz
 rcl_timer_t timer_sensors;  // 5Hz
-//rcl_timer_t timer_status;   // 1Hz
 
 rclc_executor_t executor;
 rclc_support_t  support;
@@ -116,9 +127,7 @@ static void set_string(rosidl_runtime_c__String& field, const char* str)
     size_t len = strlen(str);
     // Si ya tiene buffer suficiente, reusar; si no, pedir al allocator
     if (field.capacity <= len) {
-        if (field.data) {
-            allocator.deallocate(field.data, allocator.state);
-        }
+        if (field.data) allocator.deallocate(field.data, allocator.state);
         field.data     = (char*)allocator.allocate(len + 1, allocator.state);
         field.capacity = len + 1;
     }
@@ -169,6 +178,7 @@ void estop_cb(const void* msg_in)
         robot.stop();
         v = 0; w = 0;
         buzzer.play(BuzzerPattern::DISCONNECTED);
+        display_state = BuzzerPattern::DISCONNECTED;
     }
 }
 // ── Timers publishers ────────────────────────────────────────
@@ -199,6 +209,23 @@ void timer_odom_cb(rcl_timer_t* timer, int64_t)
     msg_odom.twist.covariance[35]      = 0.05; // wz
 
     RCSOFTCHECK(rcl_publish(&pub_odom, &msg_odom, NULL));
+}
+
+// ── Timer bateria ─────────────────────────────────────────────
+void timer_battery_cb(rcl_timer_t* timer, int64_t)
+{
+    if (timer == NULL) return;
+    
+    builtin_interfaces__msg__Time now = get_ros_time();
+    
+    msg_battery.header.stamp    = now;
+    msg_battery.voltage         = battery.getVoltage();
+    msg_battery.current         = battery.getCurrent();
+    msg_battery.percentage      = battery.getPercent() / 100.0f;
+    msg_battery.power_supply_status         = 
+        sensor_msgs__msg__BatteryState__POWER_SUPPLY_STATUS_DISCHARGING;
+    msg_battery.present         = true;
+    RCSOFTCHECK(rcl_publish(&pub_battery, &msg_battery, NULL));
 }
 
 // ── Timer sensors ─────────────────────────────────────────────
@@ -245,38 +272,9 @@ void timer_sensors_cb(rcl_timer_t* timer, int64_t)
         robot.stop();
         v = 0; w = 0;
         buzzer.play(BuzzerPattern::LIFTED);
+        display_state = BuzzerPattern::LIFTED;
     }
 }
-// ── Timer status — 1Hz ───────────────────────────────────────
-/*void timer_status_cb(rcl_timer_t* timer, int64_t)
-{
-    if (timer == NULL) return;
-
-    bool b1 = bumpers.get(0).pressed;
-    bool b2 = bumpers.get(1).pressed;
-    bool b3 = bumpers.get(2).pressed;
-    bool b4 = bumpers.get(3).pressed;
-    bool b5 = bumpers.get(4).pressed;
-    bool lifted = (b3 && b4) || (b1 && b5) || (b2 && b5);
-
-    const char* agent_str =
-        agent_state == AgentState::AGENT_CONNECTED    ? "CONNECTED" :
-        agent_state == AgentState::AGENT_DISCONNECTED ? "DISCONNECTED" : "WAITING";
-
-    char buf[160];
-    snprintf(buf, sizeof(buf),
-        "{\"uptime\":%lu,\"agent\":\"%s\",\"ctrl_hz\":%.1f,"
-        "\"bumper_any\":%s,\"lifted\":%s,\"estop\":%s}",
-        millis() / 1000,
-        agent_str,
-        ctrl_hz,
-        bumpers.anyPressed() ? "true" : "false",
-        lifted               ? "true" : "false",
-        estop                ? "true" : "false"
-    );
-    set_string(msg_status.data, buf);
-    RCSOFTCHECK(rcl_publish(&pub_status, &msg_status, NULL));
-}*/
 
 // ── Crear entidades micro-ROS ─────────────────────────────────
 bool create_entities()
@@ -287,7 +285,6 @@ bool create_entities()
         return false;
     if (rclc_node_init_default(&node, "mow_base_node", "", &support) != RCL_RET_OK)
         return false;
-
     if (rmw_uros_sync_session(1000) != RCL_RET_OK)
         return false;
     
@@ -299,44 +296,40 @@ bool create_entities()
     if (rclc_subscription_init_default(&sub_estop, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
         "estop") != RCL_RET_OK) return false;
-    //  ── Publishers ───────────────────────────────────────────
+    //  ── Publishers - RELIABLE (default)───────────────────────
     if (rclc_publisher_init_default(&pub_debug_cmd, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
         "debug/cmd_received") != RCL_RET_OK) return false;
  
-    // odom con QoS RELIABLE
     if (rclc_publisher_init_default(&pub_odom, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
         "odom/unfiltered") != RCL_RET_OK) return false;
     
-    // sonares con QoS BEST_EFFORT
-    rmw_qos_profile_t qos_sensor = rmw_qos_profile_sensor_data;
+    if (rclc_publisher_init_default(&pub_battery, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, BatteryState),
+        "battery/state") != RCL_RET_OK) return false;
     
-    if (rclc_publisher_init(&pub_sonar_l, &node,
+    if (rclc_publisher_init_default(&pub_sonar_l, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range),
-        "sonar/left", &qos_sensor) != RCL_RET_OK) return false;
-    if (rclc_publisher_init(&pub_sonar_c, &node,
+        "sonar/left") != RCL_RET_OK) return false;
+    if (rclc_publisher_init_default(&pub_sonar_c, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range),
-        "sonar/center", &qos_sensor) != RCL_RET_OK) return false;
-    if (rclc_publisher_init(&pub_sonar_r, &node,
+        "sonar/center") != RCL_RET_OK) return false;
+    if (rclc_publisher_init_default(&pub_sonar_r, &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Range),
-        "sonar/right", &qos_sensor) != RCL_RET_OK) return false;
+        "sonar/right") != RCL_RET_OK) return false;
 
     const char* bumper_topics[BUMPER_MAX_SENSORS] = {
         "bumper/B1_front_left", "bumper/B2_front_right",
         "bumper/B3_left", "bumper/B4_right", "bumper/B5_back"
     };
     for (int i = 0; i < BUMPER_MAX_SENSORS; i++) {
-        if (rclc_publisher_init(&pub_bumper[i], &node,
+        if (rclc_publisher_init_default(&pub_bumper[i], &node,
             ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
-            bumper_topics[i], &qos_sensor) != RCL_RET_OK) return false;
+            bumper_topics[i]) != RCL_RET_OK) return false;
         msg_bumper[i].data = false;
     }
     
-    /*if (rclc_publisher_init_default(&pub_status, &node,
-        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-        "system_status") != RCL_RET_OK) return false;*/
-
     // Inicializar mensajes Range
     const char* sonar_frames[3] = {"sonar_left", "sonar_center", "sonar_right"};
     for (int i = 0; i < 3; i++) {
@@ -349,24 +342,21 @@ bool create_entities()
     }
     set_string(msg_odom.header.frame_id, "odom");
     set_string(msg_odom.child_frame_id,  "base_link");
-    
-    /*// Inicializar buffer status
-    msg_status.data.data     = nullptr;
-    msg_status.data.size     = 0;
-    msg_status.data.capacity = 0;*/
+    set_string(msg_battery.header.frame_id, "battery");
 
     // ── Timers ───────────────────────────────────────────────
+    // odom: 20ms = 50 Hz
     if (rclc_timer_init_default(&timer_odom, &support,
-        RCL_MS_TO_NS(90), timer_odom_cb) != RCL_RET_OK) return false;
-
+        RCL_MS_TO_NS(20), timer_odom_cb) != RCL_RET_OK) return false;
+    // bateria: 500ms = 2 Hz
+    if (rclc_timer_init_default(&timer_battery, &support,
+        RCL_MS_TO_NS(500), timer_battery_cb) != RCL_RET_OK) return false;
+    // sonares, bumpers: 200ms = 5 Hz
     if (rclc_timer_init_default(&timer_sensors, &support,
         RCL_MS_TO_NS(200), timer_sensors_cb) != RCL_RET_OK) return false;
 
-    /*if (rclc_timer_init_default(&timer_status, &support,
-        RCL_MS_TO_NS(2000), timer_status_cb) != RCL_RET_OK) return false;*/
-
-    // ── Executor — 2 subs + 3 timers = 5 handles ─────────────
-    if (rclc_executor_init(&executor, &support.context, 4, &allocator)
+    // ── Executor — 2 subs + 3 timers  = 5 handles ─────────────
+    if (rclc_executor_init(&executor, &support.context, 5, &allocator)
         != RCL_RET_OK) return false;
 
     if (rclc_executor_add_subscription(&executor, &sub_cmdvel,
@@ -375,9 +365,8 @@ bool create_entities()
         &msg_estop_in, &estop_cb, ON_NEW_DATA) != RCL_RET_OK) return false;
 
     if (rclc_executor_add_timer(&executor, &timer_odom)   != RCL_RET_OK) return false;
+    if (rclc_executor_add_timer(&executor, &timer_battery) != RCL_RET_OK) return false;
     if (rclc_executor_add_timer(&executor, &timer_sensors) != RCL_RET_OK) return false;
-    //if (rclc_executor_add_timer(&executor, &timer_status)  != RCL_RET_OK) return false;
-
     return true;
 }
 
@@ -389,41 +378,51 @@ void destroy_entities()
 
     rcl_publisher_fini(&pub_debug_cmd, &node);
     rcl_publisher_fini(&pub_odom,      &node);
+    rcl_publisher_fini(&pub_battery,   &node);
     rcl_publisher_fini(&pub_sonar_l,   &node);
     rcl_publisher_fini(&pub_sonar_c,   &node);
     rcl_publisher_fini(&pub_sonar_r,   &node);
     for (int i = 0; i < BUMPER_MAX_SENSORS; i++)
         rcl_publisher_fini(&pub_bumper[i], &node);
-    
-    //rcl_publisher_fini(&pub_status, &node);
 
     rcl_subscription_fini(&sub_cmdvel, &node);
     rcl_subscription_fini(&sub_estop,  &node);
     rcl_timer_fini(&timer_odom);
+    rcl_timer_fini(&timer_battery);
     rcl_timer_fini(&timer_sensors);
-    //rcl_timer_fini(&timer_status);
     rclc_executor_fini(&executor);
     rcl_node_fini(&node);
     rclc_support_fini(&support);
 }
 
+// ── Error loop ───────────────────────────────────────────────
+void error_loop()
+{
+    while (true) {
+        buzzer.update();
+        delay(100);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
 void setup()
 {
-    Serial.begin(115200);
+    Serial.begin(921600);
     buzzer.begin();
     robot.begin();
     sonars.begin();
     bumpers.begin();
-    //delay(500);
+    battery.begin();
+    display.begin();
     
     set_microros_serial_transports(Serial);
 
     agent_state = AgentState::WAITING_AGENT;
-    //delay(1000);
     last_ctrl   = millis();
     ctrl_hz_ts  = millis();
 }
 
+// ─────────────────────────────────────────────────────────────
 void loop()
 {
     unsigned long now = millis();
@@ -440,7 +439,8 @@ void loop()
 		        agent_state = AgentState::AGENT_CONNECTED;
 		        last_cmd_ms = now;
 		        ping_ok     = true;
-		        buzzer.play(BuzzerPattern::CONNECTED);
+		        display_state = BuzzerPattern::CONNECTED;
+                        buzzer.play(BuzzerPattern::CONNECTED);
 		    }
 		}
 	    }
@@ -456,7 +456,8 @@ void loop()
 		robot.stop();
 		v = 0; w = 0; estop = false;
 		agent_state = AgentState::AGENT_DISCONNECTED;
-		buzzer.play(BuzzerPattern::DISCONNECTED);
+		display_state = BuzzerPattern::DISCONNECTED;
+                buzzer.play(BuzzerPattern::DISCONNECTED);
 		break;
 	    }
 
@@ -478,14 +479,15 @@ void loop()
 		        agent_state = AgentState::AGENT_CONNECTED;
 		        last_cmd_ms = now;
 		        ping_ok     = true;
-		        buzzer.play(BuzzerPattern::CONNECTED);
+		        display_state = BuzzerPattern::CONNECTED;
+                        buzzer.play(BuzzerPattern::CONNECTED);
 		    }
 		}
 	    }
             break;
     }
 
-    // ── Control loop 20ms ────────────────────────────────────
+    // ── Control loop 50 Hz ───────────────────────────────────
     if (now - last_ctrl >= PERIOD_MS) {
         last_ctrl = now;
         // Medir frecuencia real del control loop
@@ -499,6 +501,7 @@ void loop()
         sonars.update();
         bumpers.update();
         buzzer.update();
+        battery.update();              
+        display.update(battery, display_state);
     }
-
 }

@@ -1,11 +1,11 @@
 #include "BumperManager.h"
 
 static const char* BUMPER_NAMES[BUMPER_MAX_SENSORS] = {
-    "B1_front_left",
-    "B2_front_right",
-    "B3_left",
-    "B4_right",
-    "B5_back"
+    "BumperFL_Link",
+    "BumperFR_Link",
+    "BumperL_Link",
+    "BumperR_Link",
+    "BumperB_Link"
 };
 
 BumperManager::BumperManager(const uint8_t pins[BUMPER_MAX_SENSORS],
