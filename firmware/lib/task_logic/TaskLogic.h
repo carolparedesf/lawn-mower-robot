@@ -133,6 +133,52 @@ private:
     bool prev_ = false;
 };
 
+// ── Secuenciador de beeps (buzzer activo: solo ON/OFF) ──────────────────────
+// Misma idea que BuzzerManager pero propio de mow_tasks, para no tocar la
+// libreria que usa el entorno mow. No bloquea: step(now) dice si el buzzer
+// debe estar encendido. Las secuencias deben ser arrays estaticos.
+struct Beep { uint16_t on_ms; uint16_t off_ms; uint8_t repeats; };
+
+class BeepSequencer {
+public:
+    // Siempre reinicia (un sonido nuevo corta el anterior)
+    void play(const Beep* seq, uint8_t count, uint32_t now_ms)
+    {
+        if (seq == nullptr || count == 0) return;
+        seq_ = seq; count_ = count; idx_ = 0; rep_ = 0;
+        in_on_ = true; t0_ = now_ms; playing_ = true;
+    }
+    void stop() { playing_ = false; }
+    bool playing() const { return playing_; }
+
+    // Avanza la secuencia; devuelve el estado del pin (true = sonando)
+    bool step(uint32_t now_ms)
+    {
+        while (playing_) {
+            const Beep& b = seq_[idx_];
+            const uint32_t el = now_ms - t0_;
+            if (in_on_) {
+                if (el < b.on_ms) return true;
+                in_on_ = false; t0_ += b.on_ms;
+            } else {
+                if (el < b.off_ms) return false;
+                t0_ += b.off_ms;
+                if (++rep_ >= (b.repeats ? b.repeats : 1)) {
+                    rep_ = 0;
+                    if (++idx_ >= count_) { playing_ = false; break; }
+                }
+                in_on_ = true;
+            }
+        }
+        return false;
+    }
+private:
+    const Beep* seq_ = nullptr;
+    uint8_t  count_ = 0, idx_ = 0, rep_ = 0;
+    bool     in_on_ = false, playing_ = false;
+    uint32_t t0_ = 0;
+};
+
 // ── Diezmado de la odometria ────────────────────────────────────────────────
 // Publica la ultima muestra cada N ciclos de control (N = control_hz / pub_hz).
 inline uint32_t odomDecimation(uint32_t control_hz, uint32_t pub_hz)
