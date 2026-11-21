@@ -102,6 +102,44 @@ static void test_events()
     CHECK(e.step(true));
 }
 
+static void test_beep_sequencer()
+{
+    static const Beep two[] = { {100, 100, 2} };                 // 2 beeps
+    static const Beep nav[] = { {100, 100, 2}, {400, 0, 1} };    // corto-corto-largo
+    BeepSequencer s;
+    CHECK(!s.playing() && !s.step(0));
+
+    s.play(two, 1, 1000);
+    CHECK(s.playing());
+    CHECK(s.step(1000));        // on
+    CHECK(s.step(1099));
+    CHECK(!s.step(1100));       // off
+    CHECK(!s.step(1199));
+    CHECK(s.step(1200));        // 2do beep
+    CHECK(!s.step(1300));
+    CHECK(!s.step(1400) && !s.playing());   // termino (400 ms en total)
+
+    // Muestreo grueso (20 Hz): no se traba y termina
+    s.play(nav, 2, 0);
+    int on = 0;
+    for (uint32_t t = 0; t <= 1000; t += 50) on += s.step(t) ? 1 : 0;
+    CHECK(!s.playing());
+    CHECK(on == 2 + 2 + 8);     // 100 ms + 100 ms + 400 ms encendido
+
+    // Salto de tiempo largo: sale apagado y terminado
+    s.play(nav, 2, 0);
+    CHECK(!s.step(10000) && !s.playing());
+
+    // Uno nuevo corta al anterior
+    s.play(nav, 2, 0);
+    s.play(two, 1, 50);
+    CHECK(s.step(50) && s.playing());
+    CHECK(!s.step(450) && !s.playing());
+
+    s.play(nullptr, 1, 0);  CHECK(!s.playing());
+    s.play(two, 0, 0);      CHECK(!s.playing());
+}
+
 static void test_odom_decimation()
 {
     CHECK(odomDecimation(50, 50) == 1);
@@ -162,6 +200,7 @@ int main()
     test_lift_latch();
     test_battery_gate();
     test_events();
+    test_beep_sequencer();
     test_odom_decimation();
     test_period_stats();
     test_ping_monitor();
