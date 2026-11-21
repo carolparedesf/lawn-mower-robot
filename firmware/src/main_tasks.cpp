@@ -19,6 +19,7 @@
 #include <sensor_msgs/msg/battery_state.h>
 #include <std_msgs/msg/bool.h>
 #include <std_msgs/msg/string.h>
+#include <std_msgs/msg/float32.h>
 
 #include "Motor.h"
 #include "DiffDrive.h"
@@ -281,14 +282,16 @@ static void sensorsTask(void*)
 // Tarea micro-ROS: nucleo 0. UNICA que llama a rcl/rclc/rmw (no son
 // thread-safe). Todo lo que recibe lo deja en shared:: o en la cola de eventos.
 // ════════════════════════════════════════════════════════════════════════════
-// Entidades: 10 publishers (tope 14 en colcon_tasks.meta), 3 suscripciones
-// (tope 6), 5 handles en el executor (3 subs + 2 timers).
+// Entidades: 12 publishers (tope 14 en colcon_tasks.meta), 3 suscripciones
+// (tope 6), 6 handles en el executor (3 subs + 3 timers).
 static rcl_subscription_t sub_cmdvel, sub_estop, sub_events;
 static rcl_publisher_t    pub_odom, pub_battery;
 static rcl_publisher_t    pub_sonar[3];
 static rcl_publisher_t    pub_bumper[BUMPER_MAX_SENSORS];
 static rcl_timer_t        timer_sensors;   // 5 Hz: sonares y bumpers
 static rcl_timer_t        timer_battery;   // 1 Hz
+static rcl_publisher_t    pub_period, pub_period_max;   // diagnostico
+static rcl_timer_t        timer_diag;      // 1 Hz: periodo real del control
 static rclc_executor_t    executor;
 static rclc_support_t     support;
 static rcl_allocator_t    allocator;
@@ -304,6 +307,7 @@ static nav_msgs__msg__Odometry        msg_odom;
 static sensor_msgs__msg__BatteryState msg_battery;
 static sensor_msgs__msg__Range        msg_sonar[3];
 static std_msgs__msg__Bool            msg_bumper[BUMPER_MAX_SENSORS];
+static std_msgs__msg__Float32         msg_period, msg_period_max;
 
 // Ignorar el resultado (como RCSOFTCHECK de main.cpp; (void) no silencia
 // warn_unused_result en gcc)
@@ -401,6 +405,19 @@ static void timer_battery_cb(rcl_timer_t* timer, int64_t)
     SOFT(rcl_publish(&pub_battery, &msg_battery, NULL));
 }
 
+// Periodo real de la tarea de control en el ultimo segundo (ms): medio y
+// maximo. Sin muestras todavia: no publica.
+static void timer_diag_cb(rcl_timer_t* timer, int64_t)
+{
+    if (timer == NULL) return;
+    const tl::PeriodReport r = shared::getPeriod();
+    if (r.samples == 0) return;
+    msg_period.data     = r.avg_ms;
+    msg_period_max.data = r.max_ms;
+    SOFT(rcl_publish(&pub_period, &msg_period, NULL));
+    SOFT(rcl_publish(&pub_period_max, &msg_period_max, NULL));
+}
+
 static void publish_odom(const Odometry& o)
 {
     msg_odom.header.stamp          = get_ros_time();
@@ -436,6 +453,9 @@ static bool create_entities()
         pub_bumper[i] = rcl_get_zero_initialized_publisher();
     timer_sensors = rcl_get_zero_initialized_timer();
     timer_battery = rcl_get_zero_initialized_timer();
+    pub_period     = rcl_get_zero_initialized_publisher();
+    pub_period_max = rcl_get_zero_initialized_publisher();
+    timer_diag     = rcl_get_zero_initialized_timer();
     executor      = rclc_executor_get_zero_initialized_executor();
 
     allocator = rcl_get_default_allocator();
@@ -484,6 +504,12 @@ static bool create_entities()
         msg_bumper[i].data = false;
     }
 
+    // ── Diagnostico ─────────────────────────────────────────────────────────
+    TRY(rclc_publisher_init_default(&pub_period, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "esp32/control_period_ms"));
+    TRY(rclc_publisher_init_default(&pub_period_max, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32), "esp32/control_period_max_ms"));
+
     // ── Mensajes ────────────────────────────────────────────────────────────
     const char* sonar_frames[3] = {"SonarL_Link", "SonarC_Link", "SonarR_Link"};
     for (int i = 0; i < 3; i++) {
@@ -508,9 +534,11 @@ static bool create_entities()
                                 timer_sensors_cb));
     TRY(rclc_timer_init_default(&timer_battery, &support, RCL_MS_TO_NS(1000),
                                 timer_battery_cb));
+    TRY(rclc_timer_init_default(&timer_diag, &support, RCL_MS_TO_NS(1000),
+                                timer_diag_cb));
 
-    // ── Executor: 3 subs + 2 timers ─────────────────────────────────────────
-    TRY(rclc_executor_init(&executor, &support.context, 5, &allocator));
+    // ── Executor: 3 subs + 3 timers ─────────────────────────────────────────
+    TRY(rclc_executor_init(&executor, &support.context, 6, &allocator));
     TRY(rclc_executor_add_subscription(&executor, &sub_cmdvel, &msg_cmdvel,
                                        &cmd_vel_cb, ON_NEW_DATA));
     TRY(rclc_executor_add_subscription(&executor, &sub_estop, &msg_estop_in,
@@ -519,6 +547,7 @@ static bool create_entities()
                                        &events_cb, ON_NEW_DATA));
     TRY(rclc_executor_add_timer(&executor, &timer_sensors));
     TRY(rclc_executor_add_timer(&executor, &timer_battery));
+    TRY(rclc_executor_add_timer(&executor, &timer_diag));
 #undef TRY
     return true;
 }
@@ -539,9 +568,12 @@ static void destroy_entities()
         SOFT(rcl_subscription_fini(&sub_cmdvel, &node));
         SOFT(rcl_subscription_fini(&sub_estop, &node));
         SOFT(rcl_subscription_fini(&sub_events, &node));
+        SOFT(rcl_publisher_fini(&pub_period, &node));
+        SOFT(rcl_publisher_fini(&pub_period_max, &node));
     }
     SOFT(rcl_timer_fini(&timer_sensors));
     SOFT(rcl_timer_fini(&timer_battery));
+    SOFT(rcl_timer_fini(&timer_diag));
     SOFT(rclc_executor_fini(&executor));
     if (g_node_ok)    SOFT(rcl_node_fini(&node));
     if (g_support_ok) SOFT(rclc_support_fini(&support));
