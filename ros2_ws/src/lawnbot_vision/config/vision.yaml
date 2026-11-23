@@ -16,11 +16,15 @@ vision_node:
     grass_class: pasto
 
     # Camara (Logitech Brio 100 por USB)
-    source: /dev/video0                      # indice, /dev/videoN o ruta de un video
+    # Nombre fijo de la Brio (no cambia aunque pase de /dev/video0 a /dev/video1). Se abre con V4L2.
+    # Otra camara: ls /dev/v4l/by-id/ y usar la que termina en -video-index0. Tambien acepta un indice,
+    # /dev/videoN o la ruta de un video.
+    source: /dev/v4l/by-id/usb-046d_Brio_100_2442ZBN05H18-video-index0
     camera_width: 640
     camera_height: 480
     camera_fps: 15.0
     camera_fourcc: MJPG
+    camera_retry_s: 2.5                      # sin camara: status sin_camara, grass_present=false y reintento
     start_capture: true
 
     min_grass: 0.10                          # fraccion de la imagen que debe ser pasto

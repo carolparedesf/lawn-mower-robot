@@ -58,8 +58,8 @@ def node_utils_spin(make_node, args=None):
 
 
 class VisionNode(Node):
-    def __init__(self):
-        super().__init__('vision_node')
+    def __init__(self, **kwargs):
+        super().__init__('vision_node', **kwargs)        # kwargs: parameter_overrides en los tests
         d = self.declare_parameter
         d('model', '')                        # carpeta del export NCNN (model.ncnn.param/.bin y metadata.yaml)
         d('source', '0')                      # indice de camara, /dev/videoN o ruta de un video
@@ -76,6 +76,7 @@ class VisionNode(Node):
         d('camera_height', 480)
         d('camera_fps', 15.0)
         d('camera_fourcc', 'MJPG')            # '' = el que elija el driver
+        d('camera_retry_s', 2.5)              # sin camara: reintenta abrirla cada este tiempo
         d('start_capture', True)              # false: sin hilo de captura (pruebas)
         defaults = VisionParams()
         names = [f.name for f in fields(VisionParams)]
@@ -101,11 +102,14 @@ class VisionNode(Node):
             self.get_logger().warn(f'stale_s={self.stale_s} no supera el periodo de inferencia '
                                    f'({self.min_period:.2f} s): grass_present va a caer a false entre cuadros')
         self.cfg = {k: gp(k).value for k in ('model', 'source', 'imgsz', 'conf', 'iou', 'threads', 'grass_class',
-                                             'camera_width', 'camera_height', 'camera_fps', 'camera_fourcc')}
+                                             'camera_width', 'camera_height', 'camera_fps', 'camera_fourcc',
+                                             'camera_retry_s')}
         self.stats = {'frames': 0, 'infer_s': 0.0, 'since': time.monotonic()}
 
         self.lock = threading.Lock()
         self.latest = None                    # (VisionResult, instante)
+        self.camera_ok = None                 # None: todavia no se intento; False: no esta / se desconecto
+        self._camera = None
         self.last_status = None
         self.last_status_pub = 0.0
         self.stop = threading.Event()
@@ -154,22 +158,57 @@ class VisionNode(Node):
                 raise ValueError('falta el parametro model (carpeta del export NCNN)')
             detector = NcnnSegDetector(c['model'], c['imgsz'], c['conf'], c['iou'], c['threads'], c['grass_class'])
             self.get_logger().info(f'modelo {c["model"]} ({c["imgsz"]} px, {c["threads"]} hilo/s): {detector.names}')
-            camera = Camera(c['source'], c['camera_width'], c['camera_height'], c['camera_fps'], c['camera_fourcc'])
-            self.get_logger().info(f'camara {c["source"]}: {camera.describe()}')
         except Exception as exc:
             self.get_logger().error(f'vision no arranca: {exc}. Se publica grass_present=false y sin obstaculos')
             return
+        try:
+            self.run_capture(c, detector, Camera)
+        finally:
+            if self._camera is not None:
+                self._camera.release()
+
+    def run_capture(self, c, detector, camera_cls):
+        """Lazo de captura. Sin camara (no esta, no abre o se desconecto): error en el log UNA vez por caida,
+        status sin_camara, grass_present=false y reintento cada camera_retry_s hasta que vuelva."""
+        retry = max(0.5, float(c['camera_retry_s']))
+        self._camera = None
+        next_try = 0.0
+        down = False                          # ya se aviso la caida actual
         last = 0.0
         failures = 0
         while not self.stop.is_set():
+            if self._camera is None:
+                wait = next_try - time.monotonic()
+                if wait > 0:
+                    self.stop.wait(min(wait, 0.2))
+                    continue
+                try:
+                    self._camera = camera_cls(c['source'], c['camera_width'], c['camera_height'], c['camera_fps'],
+                                              c['camera_fourcc'])
+                except Exception as exc:
+                    self.camera_down(f'camara {c["source"]} no disponible: {exc}', not down, retry)
+                    down = True
+                    next_try = time.monotonic() + retry
+                    continue
+                self.camera_ok = True
+                self.get_logger().info(f'camara {"reconectada" if down else "abierta"}: {c["source"]} '
+                                       f'{self._camera.describe()}')
+                down = False
+                last = 0.0
+
             wait = self.min_period - (time.monotonic() - last)
-            if wait > 0:
-                time.sleep(wait)
+            if wait > 0 and self.stop.wait(wait):
+                break
             last = time.monotonic()
+            ok, frame = self._camera.read()
+            if not ok:
+                self._camera.release()
+                self._camera = None
+                self.camera_down(f'camara {c["source"]} desconectada o sin imagen', not down, retry)
+                down = True
+                next_try = time.monotonic() + retry
+                continue
             try:
-                ok, frame = camera.read()
-                if not ok:
-                    raise RuntimeError('la camara no entrego imagen')
                 stamp = self.get_clock().now().to_msg()
                 grass, dets, width = detector.detect(frame)
                 self.on_detection(grass, dets, width, stamp)
@@ -181,8 +220,14 @@ class VisionNode(Node):
                 self.on_failure()
                 if failures in (1, 30) or failures % 300 == 0:
                     self.get_logger().error(f'vision: {exc} ({failures} fallos seguidos)')
-                time.sleep(0.1)
-        camera.release()
+                self.stop.wait(0.1)
+
+    def camera_down(self, msg, log, retry):
+        self.camera_ok = False
+        self.on_failure()
+        if log:
+            self.get_logger().error(f'{msg}. grass_present=false y sin obstaculos; se reintenta cada {retry:.1f} s '
+                                    '(no se vuelve a avisar hasta que vuelva)')
 
     # ── Publicacion ──────────────────────────────────────────
 
@@ -196,8 +241,11 @@ class VisionNode(Node):
                 if self.latest is latest:
                     self.latest = None
             self.publish_obstacles([])
+        no_camera = self.camera_ok is False
+        if no_camera:
+            fresh = False
         self.grass_pub.publish(Bool(data=bool(fresh and latest[0].grass)))
-        status = 'ok' if fresh else 'sin_datos'
+        status = 'ok' if fresh else ('sin_camara' if no_camera else 'sin_datos')
         if fresh:
             status += f' pasto={latest[0].grass_fraction:.2f} obstaculos={len(latest[0].obstacles)}'
             if latest[0].skipped_far:
@@ -231,6 +279,10 @@ class VisionNode(Node):
     def shutdown_cleanup(self):
         """Sin vision no hay pasto ni obstaculos: la cuchilla se apaga."""
         self.stop.set()
+        # Esperar al hilo de captura (suelta la camara): si Python termina con el hilo dentro de OpenCV/ncnn, el
+        # proceso aborta ("terminate called without an active exception"). Una inferencia tarda < 0,3 s en la Pi.
+        if self.thread is not None:
+            self.thread.join(3.0)
         for _ in range(3):
             try:
                 self.publish(False, [])
