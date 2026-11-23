@@ -49,6 +49,42 @@ class GeofenceLaunchArgsTests(unittest.TestCase):
             self.assertIn(key, keys)
 
 
+@unittest.skipUnless(HAVE_LAUNCH, 'requiere ROS 2 (launch, launch_ros)')
+class VisionLaunchTests(unittest.TestCase):
+    """La vision real es opcional (vision:=false por defecto) y nunca corre junto con vision_stub."""
+
+    def setUp(self):
+        try:
+            self.entities = load().entities
+        except Exception as e:
+            if type(e).__name__ == 'PackageNotFoundError':
+                self.skipTest('lawnbot_nav no esta instalado en el entorno ROS')
+            raise
+
+    def node(self, executable):
+        return next(e for e in self.entities if isinstance(e, Node) and e.node_executable == executable)
+
+    def launched(self, executable, **args):
+        from launch import LaunchContext
+        ctx = LaunchContext()
+        defaults = {e.name: ''.join(t.text for t in e.default_value)
+                    for e in self.entities if isinstance(e, DeclareLaunchArgument)}
+        defaults.update(args)
+        ctx.launch_configurations.update(defaults)
+        return self.node(executable).condition.evaluate(ctx)
+
+    def test_apagada_por_defecto(self):
+        self.assertFalse(self.launched('vision_node'))
+        self.assertFalse(self.launched('vision_stub'))
+
+    def test_vision_true_lanza_el_nodo(self):
+        self.assertTrue(self.launched('vision_node', vision='true'))
+
+    def test_stub_solo_sin_vision_real(self):
+        self.assertTrue(self.launched('vision_stub', use_vision_stub='true'))
+        self.assertFalse(self.launched('vision_stub', use_vision_stub='true', vision='true'))
+
+
 SIM_LAUNCH = os.path.join(HERE, '..', 'launch', 'sim_world.launch.py')
 
 

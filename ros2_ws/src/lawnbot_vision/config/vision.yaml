@@ -1,20 +1,30 @@
 # Nodo de vision. Los numeros de decimales son obligatorios en los parametros de tipo real (ej. 0.0, no 0).
 vision_node:
   ros__parameters:
-    model: /home/mow/lawnbot/ncnn_640        # carpeta del modelo exportado (ncnn)
-    source: "0"                              # indice de camara o ruta de un video
-    imgsz: 640                               # debe coincidir con el export
+    # Export NCNN de YOLOv8n-seg (model.ncnn.param/.bin + metadata.yaml), el del repo. Se lee con ncnn directo
+    # (pip install ncnn), sin ultralytics ni torch.
+    model: /home/mow/lawn-mower-robot/vision/models/ncnn_320
+    imgsz: 320                               # debe coincidir con el export (se verifica contra metadata.yaml)
     conf: 0.4
-    max_fps: 5.0                             # la Pi 4 comparte CPU con ROS: medir antes de subirlo
-    publish_rate_hz: 5.0
-    stale_s: 1.0
+    iou: 0.7                                 # NMS
+    threads: 1                               # hilos de ncnn
+    # CPU: la Pi 4 esta cerca del limite con todo el robot. 1-2 Hz como maximo (el nodo no pasa de 2,0).
+    process_rate_hz: 1.0
+    publish_rate_hz: 2.0                     # grass_present con el ultimo resultado (blade_controller: timeout 1 s)
+    stale_s: 2.5                             # resultado mas viejo que esto = sin pasto ni obstaculos (> 1/process_rate)
     frame_id: base_footprint
     grass_class: pasto
-    use_test_alias: false                    # true solo con el modelo generico yolov8n-seg
+
+    # Camara (Logitech Brio 100 por USB)
+    source: /dev/video0                      # indice, /dev/videoN o ruta de un video
+    camera_width: 640
+    camera_height: 480
+    camera_fps: 15.0
+    camera_fourcc: MJPG
     start_capture: true
 
     min_grass: 0.10                          # fraccion de la imagen que debe ser pasto
-    grass_window: 7                          # cuadros; "hay pasto" si la mayoria lo vio
+    grass_window: 3                          # cuadros (a 1 Hz, ~3 s); "hay pasto" si la mayoria lo vio
     obstacle_classes: [arbol, planta, barrera, otro]
     min_rho: 0.05
 

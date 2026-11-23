@@ -4,9 +4,10 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -37,6 +38,12 @@ def generate_launch_description():
         for p in ('parallel', 'random', 'perimeter')
     ]
 
+    # Vision real (lawnbot_vision) OPCIONAL, apagada por defecto hasta probarla. Si esta encendida, vision_stub no se
+    # lanza aunque se pida (publican los mismos topics). FindPackageShare solo se resuelve si vision:=true.
+    vision = LaunchConfiguration('vision')
+    stub_on = PythonExpression(["'", LaunchConfiguration('use_vision_stub'), "'.lower() == 'true' and '",
+                                vision, "'.lower() != 'true'"])
+
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('use_sonar_filter', default_value='true'),
@@ -53,6 +60,7 @@ def generate_launch_description():
         # PELIGRO: con true el stub afirma que hay pasto sin ninguna deteccion. Solo para pruebas de banco con los
         # motores de corte desconectados. Apagado por defecto; mientras este activo el log lo advierte cada 10 s.
         DeclareLaunchArgument('vision_stub_grass_present', default_value='false'),
+        DeclareLaunchArgument('vision', default_value='false'),
 
         Node(package='lawnbot_nav', executable='mode_manager', name='mode_manager',
              output='screen', parameters=[cfg('mode_manager.yaml'), use_sim_time]),
@@ -97,7 +105,12 @@ def generate_launch_description():
         Node(package='lawnbot_nav', executable='vision_stub', name='vision_stub', output='screen',
              parameters=[{'grass_present': ParameterValue(LaunchConfiguration('vision_stub_grass_present'),
                                                           value_type=bool)}],
-             condition=IfCondition(LaunchConfiguration('use_vision_stub'))),
+             condition=IfCondition(stub_on)),
+
+        Node(package='lawnbot_vision', executable='vision_node', name='vision_node', output='screen',
+             parameters=[PathJoinSubstitution([FindPackageShare('lawnbot_vision'), 'config', 'vision.yaml']),
+                         use_sim_time],
+             condition=IfCondition(vision)),
 
         Node(package='lawnbot_nav', executable='safety_gate', name='safety_gate',
              output='screen', parameters=[cfg('safety_gate.yaml'), sonar_prefix, use_sim_time]),
