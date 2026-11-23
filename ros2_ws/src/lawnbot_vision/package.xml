@@ -16,7 +16,7 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
-  <!-- Fuera de rosdep: ncnn (pip install --user ncnn, en el python del sistema que usa ROS). No usa ultralytics. -->
+  <!-- Fuera de rosdep: ncnn (con pip, opcion user, en el python del sistema que usa ROS). No usa ultralytics. -->
 
   <export>
     <build_type>ament_python</build_type>
