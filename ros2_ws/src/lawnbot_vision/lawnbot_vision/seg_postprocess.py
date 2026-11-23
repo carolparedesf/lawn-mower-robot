@@ -50,6 +50,18 @@ def letterbox(frame: np.ndarray, size: int) -> Tuple[np.ndarray, Letterbox]:
     return blob, Letterbox(gain, left, top, new_w, new_h, w, h)
 
 
+def nms_per_class(xywh: np.ndarray, scores: np.ndarray, cls: np.ndarray, conf: float, iou: float):
+    """NMS separado por clase. OpenCV < 4.7 (el de Ubuntu 22.04 en la Pi es 4.5.4) no tiene NMSBoxesBatched: se
+    desplazan las cajas de cada clase para que nunca se superpongan con las de otra (como hace ultralytics)."""
+    if hasattr(cv2.dnn, 'NMSBoxesBatched'):
+        return cv2.dnn.NMSBoxesBatched(xywh.tolist(), scores.tolist(), cls.tolist(), conf, iou)
+    shifted = xywh.copy()
+    offset = cls.astype(np.float32) * 4096.0
+    shifted[:, 0] += offset
+    shifted[:, 1] += offset
+    return cv2.dnn.NMSBoxes(shifted.tolist(), scores.tolist(), conf, iou)
+
+
 def decode(out0: np.ndarray, protos: np.ndarray, num_classes: int, conf: float, iou: float = 0.7,
            max_det: int = 100) -> List[SegDetection]:
     """Detecciones con su mascara a partir de las dos salidas del modelo."""
@@ -67,8 +79,7 @@ def decode(out0: np.ndarray, protos: np.ndarray, num_classes: int, conf: float, 
     pred, cls, scores = pred[keep], cls[keep], scores[keep]
     cx, cy, bw, bh = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
     xywh = np.stack([cx - bw / 2, cy - bh / 2, bw, bh], axis=1)
-    idx = cv2.dnn.NMSBoxesBatched(xywh.tolist(), scores.tolist(), cls.tolist(), conf, iou)
-    idx = np.array(idx, dtype=int).reshape(-1)
+    idx = np.array(nms_per_class(xywh, scores, cls, conf, iou), dtype=int).reshape(-1)
     idx = idx[np.argsort(-scores[idx])][:max_det]
     if len(idx) == 0:
         return []

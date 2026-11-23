@@ -72,6 +72,18 @@ class Decode(unittest.TestCase):
         with self.assertRaises(ValueError):
             sp.decode(out0, protos, NC + 1, conf=0.4)
 
+    def test_nms_sin_NMSBoxesBatched_como_opencv_4_5(self):
+        class OldDnn:                                                    # OpenCV 4.5.4 de la Pi
+            NMSBoxes = staticmethod(sp.cv2.dnn.NMSBoxes)
+        real, sp.cv2.dnn = sp.cv2.dnn, OldDnn
+        try:
+            out0, protos = outputs([(TREE, 0.9, 100, 100, 40, 40, 5.0), (TREE, 0.8, 102, 100, 40, 40, 5.0),
+                                    (GRASS, 0.7, 100, 100, 40, 40, 5.0)])
+            dets = sp.decode(out0, protos, NC, conf=0.4)
+        finally:
+            sp.cv2.dnn = real
+        self.assertEqual(sorted(d.cls for d in dets), [TREE, GRASS])
+
 
 @unittest.skipUnless(HAVE_CV, 'requiere numpy y OpenCV')
 class GrassAndBase(unittest.TestCase):
