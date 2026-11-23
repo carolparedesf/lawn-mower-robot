@@ -626,12 +626,14 @@ def run_random_and_perimeter():
     bad = make(Perimeter, **dict(pm_cfg, use_side_sonar=True, corner_sonar_angle_deg=0.0))
     check(bad.get_logger().has('se ignora el sonar lateral', 'WARN'), 'use_side_sonar con 0 grados: avisa que se ignora el sonar lateral')
     bad.subs['nav/active_mode'](R.String('auto_perimeter'))
-    for s_ in ('left', 'center', 'right'):
-        bad.subs[f'sonar/{s_}'](R.Range(1.5))
-    for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
-        bad.subs[b_](R.Bool(False))
-    R.advance(0.1)
-    bad.timer(0.05)()
+    # sin TF odom -> base_footprint en este caso: arranca al vencer la espera de la pose (1 s) y sigue por v*dt
+    for _ in range(25):
+        for s_ in ('left', 'center', 'right'):
+            bad.subs[f'sonar/{s_}'](R.Range(1.5))
+        for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left', 'bumper/B4_right', 'bumper/B5_back'):
+            bad.subs[b_](R.Bool(False))
+        R.advance(0.05)
+        bad.timer(0.05)()
     check(bad.pubs['cmd_vel_perimeter'].last.linear.x == 0.15 and not bad.core.sonar_enabled,
           '   y sigue funcionando por bumper')
 
@@ -645,7 +647,8 @@ def run_gate_perimeter():
     def build(**over):
         g = make(SafetyGate, **dict(cfg, **over))
         tick = g.timer(0.05)
-        state = {'left': 1.5, 'center': 1.5, 'right': 1.5, 'front': False, 'mode': None, 'mode_pub': True}
+        state = {'left': 1.5, 'center': 1.5, 'right': 1.5, 'front': False, 'mode': None, 'mode_pub': True,
+                 'mode_sent': None}
 
         def run(seconds, publish=('left', 'center', 'right')):
             for _ in range(int(seconds / 0.05)):
@@ -654,8 +657,12 @@ def run_gate_perimeter():
                     g.subs[f'sonar/{s_}'](R.Range(state[s_]))
                 for b_ in ('bumper/B1_front_left', 'bumper/B2_front_right'):
                     g.subs[b_](R.Bool(state['front']))
-                if state['mode'] and state['mode_pub'] and int(R.MONO['t'] * 20) % 20 == 0:
+                # como mode_manager: al cambiar y despues cada 1 s (antes solo en la grilla de 1 s del reloj
+                # global, y el resultado dependia de cuanto tiempo habian avanzado los escenarios anteriores)
+                changed = state['mode'] != state['mode_sent']
+                if state['mode'] and state['mode_pub'] and (changed or int(round(R.MONO['t'] * 20)) % 20 == 0):
                     g.subs['nav/active_mode'](R.String(state['mode']))
+                    state['mode_sent'] = state['mode']
                 g.subs['cmd_vel_mux'](_twist(0.2, 0.0))
                 tick()
             return g.pubs['cmd_vel'].last.linear.x
@@ -722,6 +729,7 @@ def run_blade():
     from lawnbot_nav.coverage_map import CoverageMap
     from lawnbot_nav.fake_robot import FakeRobot
     from lawnbot_nav.geofence_logic import signed_distance
+    from lawnbot_nav.imu_watchdog import ImuWatchdog
     cfg_dir = os.path.join(os.path.dirname(HERE), 'config')
     load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
     fence = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]
@@ -731,7 +739,11 @@ def run_blade():
     check(small.get_logger().has('menor que 0,5 m', 'WARN'), '   y avisa si se configura una celda menor (error del GPS)')
     cm = make(CoverageMap, **load('coverage_map.yaml', 'coverage_map'))
     bl = make(BladeController, **load('blade_controller.yaml', 'blade_controller'))
-    fake_tick, cm_tick, bl_tick = robot_node.timer(0.02), cm.timer(0.1), bl.timer(0.1)
+    # La inclinacion llega por imu_watchdog (/imu/data -> /imu/tilt_deg), como en nav.launch.py
+    wd = make(ImuWatchdog, **load('imu_watchdog.yaml', 'imu_watchdog'))
+    fake_tick, cm_tick, bl_tick, wd_tick = robot_node.timer(0.02), cm.timer(0.1), bl.timer(0.1), wd.timer(0.1)
+    check('imu/data' not in bl.subs and 'imu/tilt_deg' in bl.subs,
+          'blade_controller no se suscribe a /imu/data (50 Hz): lee /imu/tilt_deg de imu_watchdog')
     drive = robot_node.subs['cmd_vel']
     S = {'inside': None, 'grass': True, 'imu': (0.0, 0.0, 0.0, 1.0), 'estop': False,
          'bumpers': {n: False for n in ('bumper/B1_front_left', 'bumper/B2_front_right', 'bumper/B3_left',
@@ -747,7 +759,7 @@ def run_blade():
         inside = (signed_distance((r.x, r.y), fence) >= 0) if S['inside_force'] is None else S['inside_force']
         feeds = {'inside': lambda: bl.subs['geofence/inside'](R.Bool(inside)),
                  'grass': lambda: bl.subs['vision/grass_present'](R.Bool(S['grass'])),
-                 'imu': lambda: bl.subs['imu/data'](R.Imu(*S['imu']))}
+                 'imu': lambda: wd.subs['imu/data'](R.Imu(*S['imu']))}
         for k, fn in feeds.items():
             if k not in S['mute']:
                 fn()
@@ -771,6 +783,10 @@ def run_blade():
         if t >= S['next']:                                  # los nodos y las entradas corren a 10 Hz
             S['next'] += 0.1
             publish_inputs()
+            n_tilt = len(wd.pubs['imu/tilt_deg'].sent)
+            wd_tick()
+            for m in wd.pubs['imu/tilt_deg'].sent[n_tilt:]:
+                bl.subs['imu/tilt_deg'](m)
             cm_tick()
             for m in cm.pubs['coverage/cell_passes'].sent[sent['passes']:]:
                 if 'passes' not in S['mute']:
@@ -913,7 +929,7 @@ def run_blade():
     trips('estop', estop_on, estop_off, expect='estop')
 
     # ── datos viejos: cada entrada requerida que deja de llegar ──
-    for key, what in (('inside', '/geofence/inside'), ('grass', '/vision/grass_present'), ('imu', '/imu/data'),
+    for key, what in (('inside', '/geofence/inside'), ('grass', '/vision/grass_present'), ('imu', '/imu/data -> /imu/tilt_deg'),
                       ('bumper/B5_back', 'un bumper'), ('passes', '/coverage/cell_passes')):
         S['mute'].add(key)
         t0 = R.MONO['t']
@@ -1941,12 +1957,24 @@ def run_sonar_prefix():
     load = lambda f, k: yaml.safe_load(open(os.path.join(cfg_dir, f)))[k]['ros__parameters']   # noqa: E731
     nodes = (('safety_gate', SafetyGate), ('random_walk', RandomWalk), ('perimeter', Perimeter),
              ('coverage_map', CoverageMap), ('potential_field', PotentialField))
+    lazy = {'random_walk': 'auto_random', 'perimeter': 'auto_perimeter', 'potential_field': 'auto_random'}
     for name, cls in nodes:
         base = load(f'{name}.yaml', name)
+        if name in lazy:
+            # Los algoritmos inactivos no reciben sonares (CPU de la Pi): se suscriben al activarse su modo
+            extra = {'enabled': True} if name == 'potential_field' else {}
+            base = dict(base, **extra)
+            idle = make(cls, **base)
+            check(not any(k.startswith('sonar') for k in idle.subs) and idle.res.running is False,
+                  f'{name}: inactivo no esta suscripto a ningun sonar ni corre su timer rapido')
         raw = make(cls, **base)
+        if name in lazy:
+            raw.subs['nav/active_mode'](R.String(lazy[name]))
         check(all(f'sonar/{s_}' in raw.subs for s_ in ('left', 'center', 'right')) and not any('sonar_filtered' in k for k in raw.subs),
               f'{name}: por defecto lee sonar/*')
         filt = make(cls, **dict(base, sonar_topic_prefix='sonar_filtered'))
+        if name in lazy:
+            filt.subs['nav/active_mode'](R.String(lazy[name]))
         check(all(f'sonar_filtered/{s_}' in filt.subs for s_ in ('left', 'center', 'right')) and not any(k.startswith('sonar/') for k in filt.subs),
               f'{name}: con sonar_topic_prefix=sonar_filtered lee sonar_filtered/*')
     own = make(SafetyGate, **dict(load('safety_gate.yaml', 'safety_gate'), sonar_topic_prefix='sonar_filtered', sonar_left_topic='sonar/left'))

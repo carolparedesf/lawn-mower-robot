@@ -5,4 +5,7 @@ imu_watchdog:
     # (el manual sigue libre). Con el IMU perdido el EKF solo predice el giro. <= 0 apaga el vigilante
     imu_timeout: 0.5
     rate_hz: 10.0
+    # Inclinacion para blade_controller (grados), una por ciclo con cada muestra nueva del IMU. Es la unica
+    # suscripcion a /imu/data de lawnbot_nav: cada una cuesta ~16 % de un nucleo de la Pi
+    tilt_topic: imu/tilt_deg
     renew_period_s: 1.0

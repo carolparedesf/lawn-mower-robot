@@ -2,7 +2,7 @@ blade_controller:
   ros__parameters:
     rate_hz: 10.0                # el nodo cutting_motors corta solo a los 0,5 s sin ordenes
     input_timeout: 1.0           # s: un dato mas viejo que esto cuenta como faltante (falla segura)
-    imu_timeout: 0.5
+    imu_timeout: 0.5             # s: /imu/tilt_deg (lo publica imu_watchdog a 10 Hz) mas viejo que esto = falta
     enable_timeout: 2.0          # s: un pedido (/cutter/enable, /trimmer/enable, /blade/force_cut) vence si no se refresca
     cutter_topic: cutter/cmd
     trimmer_topic: trimmer/cmd

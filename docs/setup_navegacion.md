@@ -306,6 +306,8 @@ sigue "girando") y, en `ekf_global`, sin yaw absoluto. Por eso:
   con prioridad justo debajo de `estop`.
 - `fake_robot` publica un `/imu/data` ideal (`imu_rate_hz`, 20 por defecto; 0 = no publica, para probar la pérdida) para que la simulación no dispare la alerta. Escenario [22] de `tools/node_scenarios.py`.
 - Límite: si el propio `imu_watchdog` no corre, no hay alerta (falla abierta). Con `nav.launch.py` arranca siempre. Al levantar el stack puede verse un `imu_lost` breve hasta que llega el primer mensaje del IMU.
+- Es la **única suscripción a `/imu/data` de `lawnbot_nav`** (cada una cuesta ~16 % de un núcleo de la Pi 4 a 50 Hz, aunque el callback no haga nada). También publica la inclinación en
+  **`/imu/tilt_deg`** (Float32, grados) a 10 Hz, una por cada muestra nueva del IMU; `blade_controller` la lee de ahí. Si `imu_watchdog` no corre, la inclinación envejece y la cuchilla se apaga (`imu_sin_dato`).
 
 ## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
 
@@ -544,11 +546,18 @@ en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de 
    y sin salir del cerco; `perimeter` (modo bumper) da la vuelta al cuarto con la pared a la derecha o a la izquierda, rodea un bloque, y con la pared fuera de alcance
    se rinde a los `search_timeout_s` (120 s) con `perimeter_lost`; con el refinamiento del sonar lateral mantiene ~0,3 m.
 
+### CPU de los nodos en la Pi 4
+
+Medido en la Pi (Humble, rclpy): cada mensaje que recibe un nodo Python cuesta ~2-3 ms de CPU aunque el callback no haga nada (`/imu/data` a 50 Hz ≈ 16 % de un núcleo,
+`/tf` a 25 Hz ≈ 10 %, 5 bumpers a 5 Hz ≈ 5 %). Por eso `random_walk`, `perimeter` y `potential_field` **no reciben sensores, distancia al cerco ni TF mientras su modo no está activo**:
+se suscriben al llegar su modo por `/nav/active_mode` y esperan el primer dato de cada sensor (como mucho 1 s) antes de arrancar, así no arrancan con `sensor_timeout`.
+Al salir del modo publican los ceros de siempre y se desuscriben (`lawnbot_nav/active_resources.py`). El `safety_gate`, `geofence_node` y `coverage_map` siguen suscriptos siempre.
+
 ## Bloque E: control de la cuchilla y mapa de cobertura
 
 ```
 app ─MQTT robot/cmd/actuator─► bridge ─► /cutter/enable, /trimmer/enable, /blade/force_cut (Bool, 4 Hz) ─┐
-/geofence/inside, /vision/grass_present, bumpers B1..B5, /imu/data, /estop, /coverage/cell_passes
+/geofence/inside, /vision/grass_present, bumpers B1..B5, /imu/tilt_deg (de imu_watchdog), /estop, /coverage/cell_passes
                                          └─► blade_controller ──► /cutter/cmd, /trimmer/cmd (Float32, 10 Hz) ──► cutting_motors (sin cambios)
 fake_robot / robot ──► coverage_map ──► /coverage/cell_passes (Int32), /coverage/map (JSON) ──► bridge ──► MQTT robot/map
 ```

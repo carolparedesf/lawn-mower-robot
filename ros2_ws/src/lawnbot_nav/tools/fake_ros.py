@@ -254,12 +254,35 @@ class Client:
         return fut
 
 
+class Subs(dict):
+    """Callbacks por topic. Un topic al que el nodo no esta suscripto (p. ej. un algoritmo inactivo, que se
+    desuscribe para ahorrar CPU) descarta el mensaje, como en ROS."""
+    def __missing__(self, topic):
+        return lambda msg: None
+
+
+class FakeTimer:
+    def __init__(self, period, cb):
+        self.period, self.cb, self.canceled = period, cb, False
+
+    def cancel(self):
+        self.canceled = True
+
+    def reset(self):
+        self.canceled = False
+
+    def fire(self):
+        if not self.canceled:          # un timer cancelado no dispara (rclpy)
+            self.cb()
+
+
 class NodeBase:
     PARAM_OVERRIDES = {}
 
     def __init__(self, name):
         self.name = name
-        self._params, self.pubs, self.subs, self.timers, self.clients = {}, {}, {}, [], {}
+        self._params, self.pubs, self.subs, self.timers, self.clients = {}, {}, Subs(), [], {}
+        self._timer_objs = []
         self.services = {}
         self._logger, self._clock = Logger(), Clock()
 
@@ -275,11 +298,20 @@ class NodeBase:
         self.pubs[topic] = pub
         return pub
 
-    def create_subscription(self, typ, topic, cb, qos):
+    def create_subscription(self, typ, topic, cb, qos, raw=False):
         self.subs[topic] = cb
+        return (topic, cb)
+
+    def destroy_subscription(self, handle):
+        topic, cb = handle
+        if self.subs.get(topic) is cb:
+            del self.subs[topic]
 
     def create_timer(self, period, cb):
         self.timers.append((period, cb))
+        t = FakeTimer(period, cb)
+        self._timer_objs.append(t)
+        return t
 
     def create_service(self, typ, name, cb):
         self.services[name] = cb
@@ -299,7 +331,9 @@ class NodeBase:
         pass
 
     def timer(self, period):
-        return [cb for p, cb in self.timers if abs(p - period) < 1e-9][0]
+        """Callback del primer timer con ese periodo; no hace nada mientras el timer este cancelado."""
+        t = [t for t in self._timer_objs if abs(t.period - period) < 1e-9][0]
+        return t.fire
 
 
 # ── tf2 ──────────────────────────────────────────────────────
@@ -318,6 +352,14 @@ class Buffer:
         tf.transform.translation.x, tf.transform.translation.y = x, y
         tf.transform.rotation.z, tf.transform.rotation.w = math.sin(yaw / 2), math.cos(yaw / 2)
         return tf
+
+
+class TransformListener:
+    def __init__(self, buffer, node, **kw):
+        self.registered = True
+
+    def unregister(self):
+        self.registered = False
 
 
 class Broadcaster:
@@ -379,6 +421,7 @@ def install():
     _module('rclpy', init=lambda *a, **k: None, spin=lambda n: None, try_shutdown=lambda: None,
             ok=lambda: True)
     _module('rclpy.node', Node=NodeBase)
+    _module('rclpy.serialization', deserialize_message=lambda data, typ: data)   # raw=True entrega el objeto tal cual
     _module('rclpy.executors', ExternalShutdownException=type('ExternalShutdownException', (Exception,), {}))
     _module('rclpy.qos', DurabilityPolicy=Msg(TRANSIENT_LOCAL=1), HistoryPolicy=Msg(KEEP_LAST=1),
             QoSProfile=lambda **k: None, ReliabilityPolicy=Msg(RELIABLE=1),
@@ -398,7 +441,7 @@ def install():
     _module('std_msgs')
     _module('std_msgs.msg', Bool=Bool, String=String, Float32=Float32, Int32=Int32)
     _module('tf2_ros', Buffer=Buffer, TransformException=TransformException,
-            TransformListener=lambda b, n: None, TransformBroadcaster=Broadcaster)
+            TransformListener=TransformListener, TransformBroadcaster=Broadcaster)
     _module('std_srvs')
     _module('std_srvs.srv', SetBool=SetBool)
     _module('robot_localization')

@@ -17,8 +17,9 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, Float32, String
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer
 
+from lawnbot_nav.active_resources import ActiveResources, Sub
 from lawnbot_nav.geofence_logic import polygon_centroid
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.perimeter_logic import (PerimeterCore, PerimeterInputs,
@@ -76,7 +77,6 @@ class Perimeter(Node):
         self.base_frame = gp('base_frame').value
         self.pose_timeout = gp('pose_timeout').value
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_warned = False
         self.geofence_frame = gp('geofence_frame_id').value
         self.centroid = None
@@ -93,16 +93,21 @@ class Perimeter(Node):
 
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/alert_in', 10)
-        for s in SONARS:
-            self.create_subscription(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.on_sonar(s, m),
-                                     qos_profile_sensor_data)
-        for name in BUMPER_FRONT + ('bumper/B3_left', 'bumper/B4_right', BUMPER_BACK):
-            self.create_subscription(Bool, name, lambda m, n=name: self.on_bumper(n, m),
-                                     qos_profile_sensor_data)
-        self.create_subscription(Float32, 'geofence/distance_to_edge', self.on_edge, 10)
+        # Solo mientras auto_perimeter esta activo (CPU de la Pi, ver active_resources.py): sensores, distancia al
+        # cerco, TF y el timer de 20 Hz. Al activarse espera el primer dato de cada sensor y la pose antes de arrancar.
+        fast = [Sub(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.on_sonar(s, m),
+                    qos_profile_sensor_data) for s in SONARS]
+        fast += [Sub(Bool, name, lambda m, n=name: self.on_bumper(n, m), qos_profile_sensor_data)
+                 for name in BUMPER_FRONT + ('bumper/B3_left', 'bumper/B4_right', BUMPER_BACK)]
+        # opcional: perimeter funciona sin cerco (sin geofence_node no espera por este dato)
+        fast.append(Sub(Float32, 'geofence/distance_to_edge', self.on_edge, 10, required=False))
+        self.res = ActiveResources(
+            self, 1.0 / gp('rate_hz').value, self.tick, fast, tf_buffer=self.tf_buffer,
+            tf_ready=lambda: lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame,
+                                         self.pose_timeout) is not None)
+        # Siempre: latcheados
         self.create_subscription(PolygonStamped, 'geofence/polygon', self.on_polygon, LATCHED)
         self.create_subscription(String, 'nav/active_mode', self.on_mode, LATCHED)
-        self.create_timer(1.0 / gp('rate_hz').value, self.tick)
         self.get_logger().info(
             f'perimeter listo (modo {MODE}, pared a la {params.side}, sonar lateral a '
             f'{params.side_sonar_angle_deg} grados)')
@@ -134,6 +139,8 @@ class Perimeter(Node):
     def on_mode(self, msg):
         self.active_mode = msg.data
         self.mode_time = time.monotonic()
+        if msg.data == MODE:
+            self.res.start()
 
     def mode_active(self, now):
         return self.active_mode == MODE and now - self.mode_time <= MODE_STALE_S
@@ -164,6 +171,8 @@ class Perimeter(Node):
     def tick(self):
         now = time.monotonic()
         active = self.mode_active(now)
+        if active and not self.was_active and not self.res.ready(now):
+            return                               # recien suscripto: esperando el primer dato de cada sensor y la pose
         if active and not self.was_active:
             self.core.reset(now)
             self.tf_warned = False
@@ -184,6 +193,8 @@ class Perimeter(Node):
         elif self.zeros_pending > 0:
             self.zeros_pending -= 1
             self.pub.publish(Twist())
+        else:
+            self.res.stop()                      # inactivo y ceros enviados: deja de recibir y de despertar
 
     def set_alert(self, alert, now, force=False):
         if alert == self.alert_sent and not (alert and now - self.last_alert_pub >= 1.0) and not force:

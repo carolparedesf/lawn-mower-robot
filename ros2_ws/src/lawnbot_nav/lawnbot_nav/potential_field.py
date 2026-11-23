@@ -18,9 +18,10 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer
 
 from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG, SONAR_MOUNTS, sonar_yaws
+from lawnbot_nav.active_resources import ActiveResources, Sub
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.potential_field_logic import PFCore, PFParams, sonar_point
 from lawnbot_nav.sensor_cache import SONARS, SensorCache
@@ -76,7 +77,6 @@ class PotentialField(Node):
         self.topics_by_mode = {m: list(gp(p).value) for m, p in MODES.items()}
 
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.cache = SensorCache()
         self.nominal = {}                      # topic -> (v, w, instante)
         self.vision = []                       # puntos (x, y) en base_frame
@@ -89,18 +89,23 @@ class PotentialField(Node):
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/alert_in', 10)
         self.status_pub = self.create_publisher(String, 'potential_field/status', 10)
-        for s in SONARS:
-            self.create_subscription(Range, f'{gp("sonar_topic_prefix").value}/{s}', lambda m, s=s: self.cache.set(f'sonar/{s}', m.range, time.monotonic()),
-                                     qos_profile_sensor_data)
-        for topic in {t for ts in self.topics_by_mode.values() for t in ts}:
-            self.create_subscription(Twist, topic, lambda m, t=topic: self.nominal.__setitem__(
-                t, (m.linear.x, m.angular.z, time.monotonic())), 10)
+        # Solo mientras esta habilitado y en un modo que lo usa (CPU de la Pi, ver active_resources.py): sonares,
+        # ordenes del algoritmo, vision, TF y el timer de 20 Hz. Al activarse espera el primer dato de cada sonar.
+        fast = [Sub(Range, f'{gp("sonar_topic_prefix").value}/{s}',
+                    lambda m, s=s: self.cache.set(f'sonar/{s}', m.range, time.monotonic()), qos_profile_sensor_data)
+                for s in SONARS]
+        fast += [Sub(Twist, topic, lambda m, t=topic: self.nominal.__setitem__(
+                     t, (m.linear.x, m.angular.z, time.monotonic())), 10, required=False)
+                 for topic in sorted({t for ts in self.topics_by_mode.values() for t in ts})]
         if self.use_vision:
-            self.create_subscription(PoseArray, gp('vision_topic').value, self.on_vision, 10)
+            fast.append(Sub(PoseArray, gp('vision_topic').value, self.on_vision, 10, required=False))
+        # La pose solo mide el progreso para el minimo local (ventana de stall_window_s): no se espera por ella
+        self.res = ActiveResources(self, 1.0 / gp('rate_hz').value, self.tick, fast, tf_buffer=self.tf_buffer)
         self.create_subscription(String, 'nav/active_mode', self.on_mode, 10)
         self.create_subscription(Bool, 'potential_field/enable', lambda m: self.set_enabled(bool(m.data)), 10)
         self.create_service(SetBool, 'potential_field/set_enabled', self.on_set_enabled)
-        self.create_timer(1.0 / gp('rate_hz').value, self.tick)
+        # Inactivo solo publica el estado (off / waiting_mode) cada STATUS_PERIOD_S
+        self.create_timer(STATUS_PERIOD_S, self.idle_status)
         self.get_logger().info(
             f'potential_field listo: {"ACTIVADO" if self.enabled else "apagado"}, solo sonares'
             f'{" + vision" if self.use_vision else ""}, modos {sorted(MODES)}')
@@ -113,6 +118,7 @@ class PotentialField(Node):
         self.enabled = value
         if not value:
             self.core.reset()
+        self.maybe_start()
 
     def on_set_enabled(self, request, response):
         self.set_enabled(bool(request.data))
@@ -121,6 +127,15 @@ class PotentialField(Node):
 
     def on_mode(self, msg):
         self.active_mode, self.mode_time = msg.data, time.monotonic()
+        self.maybe_start()
+
+    def maybe_start(self):
+        if self.enabled and self.active_mode in MODES:
+            self.res.start()
+
+    def idle_status(self):
+        if not self.res.running:
+            self.publish_status(time.monotonic(), False)
 
     def on_vision(self, msg):
         if msg.header.frame_id not in ('', self.base_frame):
@@ -157,6 +172,8 @@ class PotentialField(Node):
     def tick(self):
         now = time.monotonic()
         active = self.enabled and self.mode_ok(now)
+        if active and not self.was_active and not self.res.ready(now):
+            return                               # recien suscripto: esperando el primer dato de cada sonar
         if self.was_active and not active:
             self.zeros_pending = 3
             self.core.reset()
@@ -186,6 +203,8 @@ class PotentialField(Node):
             self.zeros_pending -= 1
             self.pub.publish(Twist())
         self.publish_status(now, active)
+        if not active and self.zeros_pending == 0:
+            self.res.stop()                      # sigue el estado con idle_status a 1 Hz
 
     def set_alert(self, alert, now, force=False):
         if alert == self.alert_sent and not (alert and now - self.last_alert_pub >= 1.0) and not force:

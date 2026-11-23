@@ -8,17 +8,19 @@ alguna, o un dato esta viejo, se publica 0 de inmediato. Nunca pasa de max_duty.
 Los pedidos llegan por /cutter/enable, /trimmer/enable y /blade/force_cut (Bool). El bridge los republica a 2-5 Hz
 mientras la app los mantenga: un `true` vale solo `enable_timeout` (2 s) desde su ultimo refresco, un `false`
 apaga de inmediato, y sin pedidos (o al arrancar) esta todo apagado. force_cut anula SOLO la condicion de pasto.
+
+La inclinacion llega ya calculada por /imu/tilt_deg (la publica imu_watchdog a 10 Hz con cada muestra nueva del IMU):
+suscribirse a /imu/data (50 Hz) costaba ~16 % de un nucleo de la Pi solo en recibir. Si imu_watchdog no corre o el
+IMU se pierde, el dato envejece y a los imu_timeout s la cuchilla se apaga, como antes.
 """
 import time
 from dataclasses import fields
 
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32, Int32, String
 
-from lawnbot_nav.blade_logic import (BUMPERS, BladeCore, BladeInputs,
-                                     BladeParams, tilt_from_quaternion)
+from lawnbot_nav.blade_logic import BUMPERS, BladeCore, BladeInputs, BladeParams
 from lawnbot_nav.node_utils import spin_with_cleanup
 from lawnbot_nav.sensor_cache import SensorCache
 
@@ -35,6 +37,7 @@ class BladeController(Node):
         d('cutter_topic', 'cutter/cmd')
         d('trimmer_topic', 'trimmer/cmd')
         d('grass_topic', 'vision/grass_present')
+        d('tilt_topic', 'imu/tilt_deg')    # grados; lo publica imu_watchdog
         defaults = BladeParams()
         names = [f.name for f in fields(BladeParams)]
         for name in names:
@@ -62,7 +65,8 @@ class BladeController(Node):
         self.create_subscription(Bool, 'geofence/inside', lambda m: self.stamp('inside', m.data), 10)
         self.create_subscription(Bool, gp('grass_topic').value, lambda m: self.stamp('grass', m.data), 10)
         self.create_subscription(Int32, 'coverage/cell_passes', lambda m: self.cache.set('passes', m.data, time.monotonic()), 10)
-        self.create_subscription(Imu, 'imu/data', self.on_imu, qos_profile_sensor_data)
+        self.create_subscription(Float32, gp('tilt_topic').value,
+                                 lambda m: self.cache.set('tilt', m.data, time.monotonic()), 10)
         for name in BUMPERS:
             self.create_subscription(Bool, name, lambda m, n=name: self.stamp(n, m.data), qos_profile_sensor_data)
 
@@ -75,10 +79,6 @@ class BladeController(Node):
 
     def stamp(self, name, value):
         self.cache.set(name, 1.0 if value else 0.0, time.monotonic())
-
-    def on_imu(self, msg):
-        q = msg.orientation
-        self.cache.set('tilt', tilt_from_quaternion(q.x, q.y, q.z, q.w), time.monotonic())
 
     def requested(self, name, now):
         """Pedido vigente: el ultimo mensaje es true y se refresco dentro de enable_timeout."""
