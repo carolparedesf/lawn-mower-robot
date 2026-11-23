@@ -4,8 +4,8 @@
 # Orden del vector: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
 ekf_local:
   ros__parameters:
-    frequency: 30.0
-    sensor_timeout: 0.2
+    frequency: 15.0
+    sensor_timeout: 0.15
     two_d_mode: true
     publish_tf: true
     publish_acceleration: false

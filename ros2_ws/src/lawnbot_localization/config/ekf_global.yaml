@@ -3,7 +3,7 @@
 # + posicion x, y del GPS (/odometry/gps, generado por navsat_transform).
 ekf_global:
   ros__parameters:
-    frequency: 30.0
+    frequency: 10.0
     sensor_timeout: 0.2
     two_d_mode: true
     publish_tf: true

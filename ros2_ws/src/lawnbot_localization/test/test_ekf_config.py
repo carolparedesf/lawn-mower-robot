@@ -49,8 +49,21 @@ class EkfConfigTests(unittest.TestCase):
     def test_el_resto_de_la_configuracion_no_cambio(self):
         for node, world in (('ekf_local', 'odom'), ('ekf_global', 'map')):
             p = load(node)
-            self.assertEqual((p['frequency'], p['sensor_timeout'], p['two_d_mode'], p['world_frame']), (30.0, 0.2, True, world))
+            self.assertEqual((p['two_d_mode'], p['world_frame']), (True, world))
             self.assertFalse(p['odom0_differential'] or p['odom0_relative'] or p['imu0_differential'] or p['imu0_relative'])
+
+    def test_frecuencias_para_la_pi(self):
+        # La Pi 4 no llegaba a 30 Hz ("Failed to meet update rate!")
+        self.assertEqual(load('ekf_local')['frequency'], 15.0)
+        self.assertEqual(load('ekf_global')['frequency'], 10.0)
+        with open(os.path.join(CONFIG, 'navsat.yaml')) as f:
+            navsat = yaml.safe_load(f)['navsat_transform']['ros__parameters']
+        self.assertLessEqual(navsat['frequency'], 10.0)
+
+    def test_sensor_timeout_al_menos_dos_periodos(self):
+        for node in ('ekf_local', 'ekf_global'):
+            p = load(node)
+            self.assertGreaterEqual(p['sensor_timeout'], 2.0 / p['frequency'] - 1e-9, node)
 
 
 if __name__ == '__main__':
