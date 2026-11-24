@@ -51,10 +51,9 @@ class NcnnSegDetector:
             raise RuntimeError(f'ncnn no pudo cargar el modelo de {model_dir}')
         self.last_infer_s = 0.0
 
-    def detect(self, frame) -> Tuple[float, List[Detection], int]:
-        """(fraccion de pasto, obstaculos candidatos con su punto base, ancho de la imagen)."""
+    def segment(self, frame):
+        """(transformacion de letterbox, detecciones con mascara): la inferencia, sin resumir."""
         np, sp = self.np, self.sp
-        t0 = time.monotonic()
         blob, lb = sp.letterbox(frame, self.imgsz)
         ex = self.net.create_extractor()
         ex.input('in0', self.ncnn.Mat(blob))
@@ -62,7 +61,13 @@ class NcnnSegDetector:
         r1, out1 = ex.extract('out1')
         if r0 != 0 or r1 != 0:
             raise RuntimeError(f'ncnn extract fallo ({r0}, {r1})')
-        dets = sp.decode(np.array(out0), np.array(out1), len(self.names), self.conf, self.iou)
+        return lb, sp.decode(np.array(out0), np.array(out1), len(self.names), self.conf, self.iou)
+
+    def detect(self, frame) -> Tuple[float, List[Detection], int]:
+        """(fraccion de pasto, obstaculos candidatos con su punto base, ancho de la imagen)."""
+        sp = self.sp
+        t0 = time.monotonic()
+        lb, dets = self.segment(frame)
         grass = sp.grass_fraction(dets, self.grass_cls, lb)
         obstacles = []
         for d in dets:

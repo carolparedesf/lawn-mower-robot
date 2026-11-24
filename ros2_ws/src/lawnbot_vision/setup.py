@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'vision_node = lawnbot_vision.vision_node:main',
+            'calibrar = lawnbot_vision.calibrate:main',
         ],
     },
 )
