@@ -58,7 +58,7 @@ class Block(unittest.TestCase):
 
     def test_sin_montaje_no_toca_cam(self):
         p = self.pasted(yaml_block([300.0, 420.0], [1.5, 0.5], 640, 480))
-        self.assertEqual(p['cam_x'], 0.0)                          # queda el del YAML
+        self.assertEqual(p['cam_x'], load_params(CONFIG)['cam_x'])   # queda el del YAML
 
 
 if __name__ == '__main__':

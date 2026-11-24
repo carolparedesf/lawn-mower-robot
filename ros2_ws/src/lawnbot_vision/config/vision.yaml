@@ -32,14 +32,16 @@ vision_node:
     obstacle_classes: [arbol, planta, barrera, otro]
     min_rho: 0.05
 
-    # ── Calibracion y camara: PROVISORIOS, medir con el robot armado ──
-    calibrated: false                        # mientras sea false, /vision/obstacles sale vacio
-    fov_h_deg: 62.0                          # campo de vision horizontal (supuesto)
-    # Fila de la base del objeto [px] (de lejos a cerca, creciente) y distancia real [m] (decreciente).
-    # Salen de calibrar.py. Estos son los valores de ejemplo de potential_field.py.
-    calib_y: [300.0, 420.0]
-    calib_d: [1.5, 0.5]
+    # ── Calibracion y camara ──
+    # Medida en la Pi con `ros2 run lawnbot_vision calibrar` (Brio 100, 640x480). Vale solo con esta resolucion
+    # y la camara montada igual: si se mueve o cambia camera_width/camera_height, volver a calibrar.
+    calibrated: true                         # con false, /vision/obstacles sale vacio
+    fov_h_deg: 62.0                          # campo de vision horizontal (supuesto, no calibrado)
+    # Fila de la base del objeto [px] (de lejos a cerca, creciente) y distancia real [m] (decreciente),
+    # medida en el piso desde debajo del lente.
+    calib_y: [246.0, 268.0, 322.0, 478.0]
+    calib_d: [2.00, 1.50, 1.00, 0.50]
     # Montaje de la camara en base_footprint (el URDF no la tiene)
-    cam_x: 0.0
-    cam_y: 0.0
+    cam_x: 0.200
+    cam_y: 0.000
     cam_yaw_deg: 0.0
