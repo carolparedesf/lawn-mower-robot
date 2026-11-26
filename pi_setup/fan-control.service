@@ -1,0 +1,11 @@
+[Unit]
+Description=Control de ventilador de la Raspberry Pi
+After=pigpiod.service
+Requires=pigpiod.service
+
+[Service]
+ExecStart=/usr/bin/python3 /home/mow/mow/fan_control.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
