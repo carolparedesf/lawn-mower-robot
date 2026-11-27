@@ -88,6 +88,47 @@ class Seleccion(unittest.TestCase):
         self.assertIn('CRUDO', fp.source_change_message(fp.SOURCE_FUSED, fp.SOURCE_GPS_RAW))
 
 
+class Diagnostico(unittest.TestCase):
+    def setUp(self):
+        self.d = fp.Diagnosis(0.0, repeat_s=30.0)
+        self.sel = fp.PositionSelector()
+
+    def test_con_fusionada_no_hay_nada_que_decir(self):
+        self.assertIsNone(self.d.report(fp.SOURCE_FUSED, self.sel, 1.0))
+
+    def test_toll_cero_explica_que_falta_gps_fix(self):
+        self.d.set_fused(fp.FUSED_TOLL_ZERO, 'toLL responde (0, 0)')
+        text = self.d.report(fp.SOURCE_GPS_RAW, self.sel, 40.0)
+        self.assertIn('no se recibio nada en 40 s', text)
+        self.assertIn('fixes descartados', text)
+        self.d.on_gps_fix(False, 45.0)
+        self.assertIn('hace 5 s, SIN fix', self.d.fused_text(50.0))
+
+    def test_solo_repite_al_cambiar_el_motivo_o_cada_tanto(self):
+        self.d.set_fused(fp.FUSED_TF_MISSING, 'falta la TF')
+        self.assertIsNotNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 1.0))
+        self.assertIsNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 2.0))
+        self.d.set_fused(fp.FUSED_TOLL_ZERO, 'cero')
+        self.assertIsNotNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 3.0))
+        self.assertIsNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 32.0))
+        self.assertIsNotNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 33.1))
+
+    def test_sin_posicion_explica_el_gps_crudo(self):
+        self.d.set_fused(fp.FUSED_TOLL_ZERO, 'cero')
+        self.sel.on_raw(LAT, LNG, 0.0, 10.0)
+        self.d.set_raw(fp.RAW_BAD_REPLY, 'POLL de gpsd sin TPV o SKY')
+        text = self.d.report(fp.SOURCE_NONE, self.sel, 15.0)
+        self.assertIn('ultimo fix crudo hace 5 s; POLL de gpsd sin TPV o SKY', text)
+
+    def test_errores_de_gpsd(self):
+        self.assertEqual(fp.classify_gpsd_error(UserWarning('GPS not active'))[0], fp.RAW_NOT_ACTIVE)
+        self.assertEqual(fp.classify_gpsd_error(IndexError('list index out of range'))[:3:2],
+                         (fp.RAW_BAD_REPLY, False))
+        self.assertTrue(fp.classify_gpsd_error(BrokenPipeError())[2])
+        self.assertTrue(fp.classify_gpsd_error(ValueError('Expecting value'))[2])
+        self.assertTrue(fp.classify_gpsd_error(Exception('Unexpected message received from gps: TPV'))[2])
+
+
 class _Log:
     def __init__(self):
         self.lines = []
@@ -133,6 +174,7 @@ class PuenteFusionado(unittest.TestCase):
 
         f = Fake()
         f.position = fp.PositionSelector()
+        f.diag = fp.Diagnosis(_module.time.monotonic())
         f.position_source = None
         f.toll_pending, f.toll_sent = False, 0.0
         f.toll_client = Client()
@@ -174,6 +216,22 @@ class PuenteFusionado(unittest.TestCase):
         f.toll_sent -= fp.FUSED_STALE_S + 0.1                # navsat se cayo a mitad de la llamada
         f.publish_position()
         self.assertEqual(len(f.requests), 4)                 # se volvio a pedir
+
+    def test_toll_en_cero_dice_que_falta_la_transformacion_de_navsat(self):
+        f = self.make()
+        f.position.on_raw(LAT, LNG, 30.0, _module.time.monotonic())
+        f.publish_position()
+        f.requests[1](_Future(0.0, 0.0))
+        self.assertEqual(f.published[0][1]['hdg'], 30.0)    # sigue el GPS crudo
+        text = f.log.lines[-1][1]
+        self.assertIn('toLL responde (0, 0)', text)
+        self.assertIn('/gps/fix no se recibio nada', text)
+
+    def test_sin_servicio_toll_lo_dice(self):
+        f = self.make(ready=False)
+        f.publish_position()
+        self.assertIn('el servicio toLL no esta disponible', f.log.lines[-1][1])
+        self.assertIn('Tampoco hay GPS crudo', f.log.lines[-1][1])
 
 
 if __name__ == '__main__':

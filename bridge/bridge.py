@@ -137,6 +137,7 @@ class RobotBridge(Node):
         self.toll_pending = False               # hay una llamada a toLL sin respuesta
         self.toll_sent = 0.0
         self.toll_client = None
+        self.diag = fused_position.Diagnosis(time.monotonic())   # por que falta la fusionada / el GPS crudo (log)
         if self.sim_datum is None:
             self.setup_fused_position()
             # GPS crudo de respaldo (hilo propio)
@@ -344,25 +345,40 @@ class RobotBridge(Node):
         try:
             from tf2_ros import Buffer, TransformListener
             from robot_localization.srv import ToLL
+            from sensor_msgs.msg import NavSatFix, NavSatStatus
         except ImportError as exc:
+            self.diag.set_fused(fused_position.FUSED_NO_MODULES,
+                                f"falta un modulo de ROS en el entorno del bridge ({exc}); revisar los source de bridge.service")
             self.get_logger().warn(f"Sin posicion fusionada ({exc}): robot/position usa el GPS crudo de gpsd")
             return
         self.ToLL = ToLL
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.toll_client = self.create_client(ToLL, fused_position.TOLL_SERVICE)
+        # Solo para el diagnostico: sin /gps/fix navsat_transform no arma su transformacion y toLL responde (0, 0)
+        self.create_subscription(
+            NavSatFix, fused_position.GPS_FIX_TOPIC,
+            lambda m: self.diag.on_gps_fix(m.status.status >= NavSatStatus.STATUS_FIX, time.monotonic()),
+            qos_profile_sensor_data)
 
     def lookup_fused_pose(self):
         """(x, y, yaw) de base_footprint en map, o None si falta la TF o esta vieja."""
         from rclpy.time import Time
         try:
+            # Time() = la ultima TF disponible (no la del instante actual, que todavia no llego)
             tf = self.tf_buffer.lookup_transform(fused_position.MAP_FRAME, fused_position.BASE_FRAME, Time())
-        except Exception:
+        except Exception as exc:
+            self.diag.set_fused(fused_position.FUSED_TF_MISSING,
+                                f"falta la TF {fused_position.MAP_FRAME}->{fused_position.BASE_FRAME} "
+                                f"({type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}); ekf_global publica map->odom")
             return None
         stamp = tf.header.stamp
         if stamp.sec != 0 or stamp.nanosec != 0:
             age = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds * 1e-9
             if age > fused_position.TF_TIMEOUT_S:
+                self.diag.set_fused(fused_position.FUSED_TF_STALE,
+                                    f"la TF {fused_position.MAP_FRAME}->{fused_position.BASE_FRAME} tiene {age:.1f} s "
+                                    f"(limite {fused_position.TF_TIMEOUT_S:.1f} s)")
                 return None
         t = tf.transform
         return t.translation.x, t.translation.y, fused_position.yaw_from_quaternion(t.rotation)
@@ -371,7 +387,12 @@ class RobotBridge(Node):
         """1 Hz: pide la conversion de la pose fusionada (la respuesta llega a on_toll) y publica la mejor fuente vigente."""
         if self.toll_pending and time.monotonic() - self.toll_sent > fused_position.FUSED_STALE_S:
             self.toll_pending = False           # navsat_transform no respondio (se cayo a mitad de la llamada)
-        if self.toll_client is not None and not self.toll_pending and self.toll_client.service_is_ready():
+            self.diag.set_fused(fused_position.FUSED_TOLL_TIMEOUT,
+                                f"toLL no respondio en {fused_position.FUSED_STALE_S:.1f} s")
+        if self.toll_client is not None and not self.toll_pending and not self.toll_client.service_is_ready():
+            self.diag.set_fused(fused_position.FUSED_TOLL_NOT_READY,
+                                "el servicio toLL no esta disponible (navsat_transform no corre o no se ve con este ROS_DOMAIN_ID)")
+        elif self.toll_client is not None and not self.toll_pending:
             pose = self.lookup_fused_pose()
             if pose is not None:
                 x, y, yaw = pose
@@ -389,16 +410,29 @@ class RobotBridge(Node):
         self.toll_pending = False
         try:
             ll = future.result().ll_point
-            self.position.on_fused(ll.latitude, ll.longitude, yaw, time.monotonic())
-        except Exception:
-            pass
+        except Exception as exc:
+            self.diag.set_fused(fused_position.FUSED_TOLL_ERROR, f"la llamada a toLL fallo ({type(exc).__name__}: {exc})")
+        else:
+            if self.position.on_fused(ll.latitude, ll.longitude, yaw, time.monotonic()):
+                self.diag.set_fused(fused_position.FUSED_OK)
+            else:
+                # navsat_transform contesta (0, 0) sin error mientras no tiene su transformacion (le falta un fix)
+                self.diag.set_fused(fused_position.FUSED_TOLL_ZERO,
+                                    f"toLL responde ({ll.latitude:g}, {ll.longitude:g}): navsat_transform todavia no "
+                                    "tiene su transformacion")
         self.send_position()
 
     def send_position(self):
-        source, position = self.position.payload(time.monotonic())
-        msg = fused_position.source_change_message(self.position_source, source)
-        if msg is not None:
-            (self.get_logger().info if source == fused_position.SOURCE_FUSED else self.get_logger().warn)(msg)
+        now = time.monotonic()
+        source, position = self.position.payload(now)
+        changed = source != self.position_source
+        if changed and source == fused_position.SOURCE_FUSED:
+            self.get_logger().info(fused_position.source_change_message(self.position_source, source))
+        # Sin la fusionada: CUAL falta (TF, toLL, /gps/fix, gpsd) y por que; al cambiar y cada DIAG_REPEAT_S
+        reason = self.diag.report(source, self.position, now)
+        if reason is not None:
+            self.get_logger().warn(reason)
+        if changed:
             self.position_source = source
             self.publish_status()
         if position is not None:
@@ -419,6 +453,7 @@ class RobotBridge(Node):
             try:
                 gpsd.connect()
             except Exception as exc:
+                self.diag.set_raw(fused_position.RAW_GPSD_DOWN, f"gpsd no disponible ({exc})")
                 if not warned:
                     self.get_logger().warn(f"gpsd no disponible ({exc}); reintento cada {fused_position.GPSD_RETRY_S:.0f} s")
                     warned = True
@@ -429,14 +464,20 @@ class RobotBridge(Node):
             while True:
                 try:
                     packet = gpsd.get_current()
-                except (OSError, ValueError) as exc:     # gpsd se cayo (socket roto o respuesta vacia): reconectar
-                    self.get_logger().warn(f"Se perdio gpsd ({exc}); reintento cada {fused_position.GPSD_RETRY_S:.0f} s")
-                    warned = True
-                    break
-                except Exception:                       # sin GPS activo o sin datos todavia: sigue conectado
+                except Exception as exc:
+                    key, text, reconnect = fused_position.classify_gpsd_error(exc)
+                    self.diag.set_raw(key, text)
+                    if reconnect:                       # socket roto o stream desfasado: reconectar
+                        self.get_logger().warn(f"gpsd: {text}; reintento cada {fused_position.GPSD_RETRY_S:.0f} s")
+                        warned = True
+                        break
                     packet = None
-                if packet is not None and packet.mode >= 2:
-                    self.position.on_raw(packet.lat, packet.lon, getattr(packet, 'track', None), time.monotonic())
+                if packet is not None:
+                    if packet.mode >= 2 and self.position.on_raw(packet.lat, packet.lon, getattr(packet, 'track', None),
+                                                                 time.monotonic()):
+                        self.diag.set_raw(fused_position.RAW_OK)
+                    else:
+                        self.diag.set_raw(fused_position.RAW_NO_FIX, f"gpsd sin fix (mode {packet.mode})")
                 time.sleep(1)
             time.sleep(fused_position.GPSD_RETRY_S)
 

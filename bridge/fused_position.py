@@ -100,6 +100,112 @@ class PositionSelector:
         return src, {'lat': fix.lat, 'lng': fix.lng, 'hdg': fix.hdg}
 
 
+DIAG_REPEAT_S = 30.0        # mientras falte la posicion fusionada, el motivo se repite en el log cada tanto
+GPS_FIX_TOPIC = 'gps/fix'   # lo que le llega a navsat_transform (gps_node ya filtrado)
+
+# Motivos por los que falta la posicion fusionada (clave del motivo; el texto lleva el detalle)
+FUSED_NO_MODULES = 'sin_modulos'
+FUSED_TF_MISSING = 'tf_falta'
+FUSED_TF_STALE = 'tf_vieja'
+FUSED_TOLL_NOT_READY = 'toll_no_disponible'
+FUSED_TOLL_ZERO = 'toll_cero'
+FUSED_TOLL_TIMEOUT = 'toll_sin_respuesta'
+FUSED_TOLL_ERROR = 'toll_error'
+FUSED_OK = 'ok'
+
+# Motivos por los que falta el GPS crudo de gpsd
+RAW_WAITING = 'esperando'
+RAW_GPSD_DOWN = 'gpsd_caido'
+RAW_NOT_ACTIVE = 'gpsd_inactivo'
+RAW_NO_FIX = 'sin_fix'
+RAW_BAD_REPLY = 'respuesta_incompleta'
+RAW_OK = 'ok'
+
+
+def classify_gpsd_error(exc):
+    """(motivo, texto, reconectar) para una excepcion de gpsd.get_current() (gpsd-py3 0.3).
+
+    gpsd-py3 levanta UserWarning si ningun receptor esta activo, IndexError/KeyError si el POLL llega sin TPV o SKY
+    (pasa al arrancar el receptor o si gpsd perdio un reporte), Exception('Unexpected message...') si el stream quedo
+    desfasado (hay que reconectar) y OSError/ValueError si se corto el socket.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, (OSError, ValueError)):
+        return RAW_GPSD_DOWN, f'se corto la conexion con gpsd ({name}: {exc})', True
+    if isinstance(exc, UserWarning):
+        return RAW_NOT_ACTIVE, 'gpsd no tiene ningun receptor activo (POLL con active=0)', False
+    if isinstance(exc, (IndexError, KeyError)):
+        return RAW_BAD_REPLY, f'POLL de gpsd sin TPV o SKY ({name}: {exc})', False
+    if 'Unexpected message' in str(exc):
+        return RAW_GPSD_DOWN, f'respuesta de gpsd fuera de orden ({exc}); se reconecta', True
+    return RAW_BAD_REPLY, f'error leyendo gpsd ({name}: {exc})', False
+
+
+class Diagnosis:
+    """Por que robot/position no es la posicion fusionada, para el log.
+
+    Guarda el ultimo motivo de cada fuente (clave, texto) y cuando llego el ultimo /gps/fix (que es lo que necesita
+    navsat_transform para tener su transformacion). report() devuelve el texto a loguear: cuando cambia la fuente o
+    el motivo, y cada DIAG_REPEAT_S mientras siga faltando la fusionada.
+    """
+
+    def __init__(self, now, repeat_s=DIAG_REPEAT_S):
+        self.repeat_s = repeat_s
+        self.started = now
+        self.fused = (FUSED_TOLL_NOT_READY, 'todavia no se pidio ninguna conversion a toLL')
+        self.raw = (RAW_WAITING, 'todavia sin respuesta de gpsd')
+        self.gps_fix_t = None
+        self.gps_fix_ok = None
+        self.last_key = None
+        self.last_log = -math.inf
+
+    def set_fused(self, key, text=''):
+        self.fused = (key, text)
+
+    def set_raw(self, key, text=''):
+        self.raw = (key, text)
+
+    def on_gps_fix(self, has_fix, now):
+        self.gps_fix_t = now
+        self.gps_fix_ok = bool(has_fix)
+
+    def gps_fix_text(self, now):
+        if self.gps_fix_t is None:
+            return (f'en /{GPS_FIX_TOPIC} no se recibio nada en {now - self.started:.0f} s: gps_node no publica '
+                    '(descarta los fixes por calidad, ver su log "fixes descartados", o no lee gpsd)')
+        age = now - self.gps_fix_t
+        state = 'con fix' if self.gps_fix_ok else 'SIN fix (STATUS_NO_FIX)'
+        return f'el ultimo /{GPS_FIX_TOPIC} llego hace {age:.0f} s, {state}'
+
+    def fused_text(self, now):
+        key, text = self.fused
+        if key == FUSED_TOLL_ZERO:
+            return f'{text}; {self.gps_fix_text(now)}'
+        return text
+
+    def raw_text(self, selector, now):
+        key, text = self.raw
+        last = 'nunca hubo fix crudo' if selector.raw is None else f'ultimo fix crudo hace {now - selector.raw.t:.0f} s'
+        if key == RAW_OK:
+            return f'{last} (gpsd responde con fix: el hilo de gpsd se atraso)'
+        return f'{last}; {text}'
+
+    def report(self, source, selector, now):
+        """Texto para el log o None. Con la fusionada vigente no hay nada que explicar."""
+        if source == SOURCE_FUSED:
+            self.last_key = None
+            return None
+        raw_key = self.raw[0] if source == SOURCE_NONE else None
+        key = (source, self.fused[0], raw_key)
+        if key == self.last_key and now - self.last_log < self.repeat_s:
+            return None
+        self.last_key, self.last_log = key, now
+        text = f'robot/position sin posicion FUSIONADA: {self.fused_text(now)}.'
+        if source == SOURCE_GPS_RAW:
+            return text + ' Se publica el GPS crudo de gpsd.'
+        return text + f' Tampoco hay GPS crudo: {self.raw_text(selector, now)}.'
+
+
 def source_change_message(old, new):
     """Texto para el log cuando cambia la fuente (None si no cambio)."""
     if old == new:

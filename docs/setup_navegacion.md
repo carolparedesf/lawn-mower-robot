@@ -740,3 +740,14 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   subirpi                                       # en la laptop
   ssh mow 'sudo systemctl restart bridge.service'
   ```
+- **`position_source` en `gps_raw` o `none`:** el bridge loguea cuál de las dos piezas falta y por qué
+  (`journalctl -u bridge.service | grep FUSIONADA`, se repite cada 30 s). Los motivos posibles son:
+  - falta la TF `map -> base_footprint` (ekf_global) o está vieja;
+  - el servicio `toLL` no está disponible;
+  - `toLL` responde `(0, 0)`, que es lo que hace navsat_transform mientras no tiene su transformación porque
+    todavía no le llegó ningún fix bueno por `/gps/fix`. El mensaje dice hace cuánto llegó el último `/gps/fix`. Si
+    no llega nada, gps_node está descartando los fixes: ver `fixes descartados` en su log (por ejemplo `eph_alto`
+    con el receptor viendo pocos satélites).
+
+  Con `none` dice además por qué tampoco hay GPS crudo: gpsd caído, gpsd sin fix (mode 1) o una respuesta
+  incompleta.

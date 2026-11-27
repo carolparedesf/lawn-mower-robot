@@ -73,7 +73,7 @@ Corre en la Pi como servicio (`bridge.service`). Traduce los mensajes MQTT de la
 - `bridge.py`: el puente. Recibe órdenes de la app (mover, modo, e-stop, cerco, cuchilla) y publica el estado del
   robot, la posición y el mapa para la app.
 - `fused_position.py`: de dónde sale la posición que ve la app: la del filtro (EKF + GPS) pasada a lat/lng; si no
-  está, el GPS crudo de `gpsd`.
+  está, el GPS crudo de `gpsd`. También arma el mensaje del log que dice cuál falta y por qué.
 - `move_mapping.py`: convierte la orden del joystick `{dir, speed}` en velocidad lineal y angular.
 - `estop_latch.py`: recuerda si el e-stop está activo, para informarlo a la app.
 - `status_alert.py`: elige qué alerta se muestra en la app cuando hay varias.
