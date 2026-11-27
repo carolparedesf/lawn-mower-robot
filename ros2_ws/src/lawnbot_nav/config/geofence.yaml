@@ -17,12 +17,13 @@ geofence_node:
     hysteresis_in: 5
     hysteresis_out: 2
 
-    # Aviso geofence_breach (/nav/alert_in -> robot/status.alert): robot a menos de inner_margin_m
+    # Aviso SUAVE geofence_breach (/nav/alert_in -> robot/status.alert; en la app, ambar "Cerca del
+    # borde del cerco"; no frena): robot a menos de inner_margin_m
     # del borde durante breach_cycles lecturas seguidas (15 a 10 Hz = 1,5 s: mas que un fix del GPS
     # a 1 Hz, asi un salto suelto no lo dispara). Ya afuera del borde real avisa de inmediato.
     # Solo avisa: inside y distance_to_edge siguen midiendo el borde real (la cuchilla y los modos
     # reaccionan igual que antes).
-    inner_margin_m: 1.0
+    inner_margin_m: 0.5
     breach_cycles: 15
 
     min_vertices: 4

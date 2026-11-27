@@ -39,4 +39,17 @@ void main() {
       expect(s.trimmer, isFalse);
     });
   });
+
+  group('Fence alerts', () {
+    test('outside_fence is really outside; geofence_breach is only near the edge', () {
+      final outside = RobotStatus.fromJson({'alert': 'outside_fence'});
+      expect(outside.isOutsideFence, isTrue);
+      expect(outside.isNearFenceEdge, isFalse);
+      final near = RobotStatus.fromJson({'alert': 'geofence_breach'});
+      expect(near.isOutsideFence, isFalse);
+      expect(near.isNearFenceEdge, isTrue);
+      final none = RobotStatus.fromJson({'alert': 'none'});
+      expect(none.isOutsideFence || none.isNearFenceEdge, isFalse);
+    });
+  });
 }

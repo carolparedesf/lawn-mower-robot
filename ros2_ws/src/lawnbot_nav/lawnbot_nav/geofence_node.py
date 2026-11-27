@@ -52,7 +52,7 @@ class GeofenceNode(Node):
         d('rate_hz', 10.0)
         d('hysteresis_in', 5)               # lecturas consecutivas "dentro" para pasar a true
         d('hysteresis_out', 2)              # lecturas consecutivas "fuera" para pasar a false
-        d('inner_margin_m', 1.0)            # franja interior que dispara geofence_breach [m]
+        d('inner_margin_m', 0.5)            # franja interior que dispara geofence_breach [m]
         d('breach_cycles', 15)              # lecturas seguidas en la franja antes de avisar
         d('min_vertices', 4)
         d('min_edge_length', 0.5)

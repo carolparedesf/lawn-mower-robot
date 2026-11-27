@@ -238,7 +238,7 @@ class BreachMonitor:
     /geofence/inside y distance_to_edge no cambian.
     """
 
-    def __init__(self, margin: float = 1.0, cycles: int = 15):
+    def __init__(self, margin: float = 0.5, cycles: int = 15):
         self.margin = max(0.0, float(margin))
         self.cycles = max(1, int(cycles))
         self.count = 0

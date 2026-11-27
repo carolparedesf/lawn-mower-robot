@@ -290,8 +290,19 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 Los nodos publican en **`/nav/alert_in`** con formato `fuente:alerta` (p. ej. `follower:geofence_not_ready`; `follower:none` la limpia).
 El `safety_gate` es el único que publica `/nav/safety_alert`: toma la de mayor prioridad entre las suyas y las vigentes de
 `/nav/alert_in` (vencen a los `alert_ttl` = 3 s sin renovarse). Prioridad: `sensor_timeout`, `bumper_front`, `bumper_back`,
-`obstacle_stop`, `estop`, `imu_lost`, `geofence_breach`, `outside_fence`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`.
+`obstacle_stop`, `estop`, `imu_lost`, `outside_fence`, `tf_lost`, `no_progress`, `perimeter_blocked`, `perimeter_lost`, `perimeter_misconfigured`, `random_blocked`, `geofence_not_ready`, `coverage_error`, `no_pose`, `auto_start_timeout`, `obstacle_near`, `geofence_breach`.
 El bridge la manda como `alert` en `robot/status`.
+
+### Freno por cerco (`safety_gate`, `geofence_brake`)
+
+- En `auto_random`, `auto_parallel` y `auto_perimeter`, con `/geofence/inside` false (con la histéresis de `geofence_node`: 2
+  lecturas a 10 Hz) el `safety_gate` publica cero (ni avanza ni gira) y la alerta **`outside_fence`** (roja en la app). Con
+  un cerco cargado, si `/geofence/inside` deja de llegar más de `geofence_timeout` (1 s) también frena.
+- En **manual no frena**, para poder volver a meter el robot; la cuchilla igual queda apagada (`blade_controller` mira
+  `/geofence/inside` en cualquier modo). Con el cerco `OK` y el robot afuera avisa `outside_fence` igual.
+- Sin cerco (`NO_POLYGON`) o sin `geofence_node` no frena.
+- **`geofence_breach`** es solo un aviso suave de `geofence_node` (ámbar en la app, "Cerca del borde del cerco"): el robot
+  pasó `breach_cycles` (15) lecturas seguidas a menos de `inner_margin_m` (0,5 m) del borde. No frena.
 
 ### Vigilante del IMU (`imu_watchdog`, `config/imu_watchdog.yaml`)
 
@@ -380,7 +391,7 @@ AVANZAR → (obstáculo, bumper o borde del cerco) → RETROCEDER 0,35 m → GIR
   se puede arrancar dentro de la franja del borde: solo dispara si se acerca, así sale hacia adentro en vez de retroceder en bucle.
 - **Margen del borde (`edge_margin`, 0,5 m):** dentro del margen y avanzando hacia el borde hace la maniobra de borde (retroceso y giro al centroide) **antes de cruzarlo**. Si ya mira al interior no dispara
   (antes disparaba siempre, y el retroceso lo llevaba hacia el borde). El retroceso se corta si el borde queda a menos de `edge_backup_stop_distance` (0,15 m) y se sigue acercando.
-- **Fuera del cerco (distancia negativa) → recuperación:** a menos de `max_outside_recovery` (1,0 m) del borde **gira en el lugar hacia el centroide** y **avanza despacio** (`recover_speed`, 0,1 m/s) hasta volver a
+- **Fuera del cerco (distancia negativa) → recuperación:** con el freno por cerco del `safety_gate` (`geofence_brake: true`, por defecto) esta maniobra queda frenada en cuanto `/geofence/inside` pasa a false: el robot se queda quieto con `outside_fence` y hay que meterlo en manual. Sin ese freno: a menos de `max_outside_recovery` (1,0 m) del borde **gira en el lugar hacia el centroide** y **avanza despacio** (`recover_speed`, 0,1 m/s) hasta volver a
   entrar. Si hay un obstáculo adelante (`obstacle_distance` o bumper frontal, lo mismo que frenaría el `safety_gate`) **gira más** antes de avanzar y, al despejarse, avanza recto `recover_clear_time_s` (1,5 s);
   si la cola o un costado rozan (bumper trasero o lateral) **avanza** en vez de girar. A más de `max_outside_recovery`, sin el centroide (`/geofence/polygon` o pose) o pasados `recover_timeout_s` (60 s)
   **se queda quieto y avisa `random:outside_fence`**. Un cerco nuevo que llega con el robot en marcha y lo deja afuera entra en esta recuperación; mientras el cerco se reconvierte (`WAITING_CONVERSION`, distancia NaN)
@@ -590,7 +601,7 @@ queda alimentado y apagado). Nunca se publica más que `max_duty` del motor.
 
 Payload **real** de la app (`robot/cmd/actuator`, QoS 1, uno por cada cambio; la app no lo refresca): `{"blade": bool, "trimmer": bool, "charging": bool}`. El contrato no cambió.
 `force_cut` (bool) es una **clave opcional nueva**: la app todavía no la envía (falta agregarla en `ActuatorCommand`); si falta o no es el booleano `true`, vale `false`.
-`charging` no se atiende. La lógica está en `bridge/actuator_relay.py` (**hay que copiarlo a la Pi junto a `bridge.py`**, en `~/pi/`).
+`charging` no se atiende. La lógica está en `bridge/actuator_relay.py` (llega a la Pi con `subirpi`, ver *Despliegue del bridge*).
 
 - El bridge **republica a 4 Hz** `/cutter/enable`, `/trimmer/enable` y `/blade/force_cut` mientras el pedido siga vigente; `blade_controller` los vence a los 2 s sin refresco (así, si el bridge muere, se apaga).
 - **Solo con un modo vigente que lo permita:** `manual` o automático (`auto_parallel`, `auto_random`, `auto_perimeter` según `/nav/active_mode`). Se apaga y se **borra** al pasar a `idle` o `stop`, y si
@@ -705,7 +716,7 @@ El nodo `robot_events` (`config/robot_events.yaml`, arranca con `nav.launch.py`)
 `low_battery` tiene histéresis: avisa **una vez** y solo se rearma al subir a umbral + `low_battery_margin` (25 %); con `low_battery_repeat_s` > 0 hay recordatorio periódico (0 = no).
 Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer dato tras arrancar el nodo no genera eventos (reiniciar no dispara nada falso).
 
-- **App:** el bridge pone el evento en `robot/status.alert` durante 5 s, **solo si no hay una alerta de seguridad** (`/nav/safety_alert` manda). Contrato intacto. `bridge/status_alert.py` hay que copiarlo a la Pi junto a `bridge.py` (ver *Despliegue del bridge* en Pendientes).
+- **App:** el bridge pone el evento en `robot/status.alert` durante 5 s, **solo si no hay una alerta de seguridad** (`/nav/safety_alert` manda). Contrato intacto. `bridge/status_alert.py` llega a la Pi con `subirpi` (ver *Despliegue del bridge* en Pendientes).
 - **Buzzer (quien lo maneje):** suscribirse a `/robot/events` (`ros2 topic echo /robot/events`) y mapear cada nombre a un patrón de sonido. **No se tocó el firmware**: hoy el firmware no escucha este topic.
 - Pruebas sin ROS: `PYTHONPATH=. python3 test/test_events.py`, `python3 bridge/test_status_alert.py` y el escenario [10] de `tools/node_scenarios.py`.
 
@@ -720,9 +731,12 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   (≈ 6,7 Hz) mientras está presionado. El joystick llama a su `listener` cada 100 ms (`period` por defecto de
   `flutter_joystick` 0.1.0, también con el stick quieto) y la app publica con un retardo de 50 ms: ≈ 10 Hz.
   Ambos quedan bien por debajo de los 0,5 s de `twist_mux`, `safety_gate` y del watchdog del firmware.
-- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `estop_latch.py`, `fused_position.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
-  `sudo systemctl restart bridge.service`. Si falta un auxiliar, `bridge.py` **no arranca** y dice cuál falta (`journalctl -u bridge.service -n 20`).
+- **Despliegue del bridge:** en la Pi el bridge corre desde `~/lawn-mower-robot/bridge/` (`bridge.service` apunta ahí),
+  así que se actualiza junto con el resto del repo: desde la laptop `subirpi` (rsync del repo a `mow:~/lawn-mower-robot/`)
+  y después, en la Pi, `sudo systemctl restart bridge.service`. Los auxiliares (`actuator_relay.py`, `estop_latch.py`,
+  `fused_position.py`, `move_mapping.py`, `status_alert.py`) están en la misma carpeta. Si falta uno, `bridge.py`
+  **no arranca** y dice cuál (`journalctl -u bridge.service -n 20`).
   ```bash
-  scp bridge/bridge.py bridge/actuator_relay.py bridge/estop_latch.py bridge/fused_position.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
+  subirpi                                       # en la laptop
+  ssh mow 'sudo systemctl restart bridge.service'
   ```
-  Hasta entonces la Pi sigue con el bridge viejo.

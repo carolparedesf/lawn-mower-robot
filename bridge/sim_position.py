@@ -2,7 +2,7 @@
 
 Con la opcion activa, bridge.py toma la TF map -> base_footprint y la convierte a lat/lng con el MISMO datum y la misma
 escala (meters_per_degree) que geofence_node en modo datum, asi el robot se ve dentro del cerco que dibujo la app.
-Este modulo solo lo importa bridge.py cuando la opcion esta activa: en el robot real no hace falta copiarlo a ~/pi/.
+Este modulo solo lo importa bridge.py cuando la opcion esta activa: en el robot real no se usa.
 Requiere el paquete lawnbot_nav (geofence_logic).
 
   python3 bridge.py --sim-position --datum-lat -25.3 --datum-lng -57.6

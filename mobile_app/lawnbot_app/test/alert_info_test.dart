@@ -30,8 +30,16 @@ void main() {
     expect(knownAlertCodes.toSet().containsAll(codes), isTrue);
   });
 
-  test('geofence_breach and estop are errors; obstacle_near only warns', () {
-    expect(describeAlert('geofence_breach')!.severity, AlertSeverity.error);
+  test('geofence_breach is a soft amber notice; outside_fence is the red one', () {
+    final near = describeAlert('geofence_breach')!;
+    expect(near.text, 'Cerca del borde del cerco');
+    expect(near.severity, AlertSeverity.warning);
+    final outside = describeAlert('outside_fence')!;
+    expect(outside.text, 'El robot salió del cerco');
+    expect(outside.severity, AlertSeverity.error);
+  });
+
+  test('estop is an error; obstacle_near only warns', () {
     expect(describeAlert('estop')!.severity, AlertSeverity.error);
     expect(describeAlert('obstacle_near')!.severity, AlertSeverity.warning);
   });

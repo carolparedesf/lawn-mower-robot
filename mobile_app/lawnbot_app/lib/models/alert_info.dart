@@ -34,8 +34,10 @@ const Map<String, AlertInfo> _table = {
   'obstacle_near': AlertInfo('obstacle_near',
       'Obstáculo cerca: el robot reduce la velocidad', AlertSeverity.warning),
   // Fence and position
-  'geofence_breach':
-      AlertInfo('geofence_breach', 'El robot salió del cerco', AlertSeverity.error),
+  // Soft notice: the robot is within inner_margin_m of the edge (it does not stop).
+  'geofence_breach': AlertInfo(
+      'geofence_breach', 'Cerca del borde del cerco', AlertSeverity.warning),
+  // Really outside: the safety gate stops the automatic modes.
   'outside_fence':
       AlertInfo('outside_fence', 'El robot salió del cerco', AlertSeverity.error),
   'geofence_not_ready': AlertInfo('geofence_not_ready',

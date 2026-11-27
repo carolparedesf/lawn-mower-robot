@@ -13,13 +13,16 @@ ALERT_BUMPER_BACK = 'bumper_back'
 ALERT_OBSTACLE_STOP = 'obstacle_stop'
 ALERT_OBSTACLE_NEAR = 'obstacle_near'
 ALERT_IMU_LOST = 'imu_lost'
+ALERT_OUTSIDE_FENCE = 'outside_fence'
+# Aviso suave de geofence_node (robot a menos de inner_margin_m del borde): no frena, prioridad baja
+ALERT_NEAR_FENCE_EDGE = 'geofence_breach'
 
 # De mayor a menor prioridad. Las alertas de otros nodos llegan por /nav/alert_in ('fuente:alerta')
 ALERT_PRIORITY = (
     ALERT_SENSOR_TIMEOUT, ALERT_BUMPER_FRONT, ALERT_BUMPER_BACK, ALERT_OBSTACLE_STOP,
-    'estop', ALERT_IMU_LOST, 'geofence_breach', 'outside_fence', 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
+    'estop', ALERT_IMU_LOST, ALERT_OUTSIDE_FENCE, 'tf_lost', 'no_progress', 'perimeter_blocked', 'perimeter_lost', 'perimeter_misconfigured',
     'random_blocked', 'local_minimum', 'geofence_not_ready', 'coverage_error', 'no_pose',
-    'auto_start_timeout', ALERT_OBSTACLE_NEAR,
+    'auto_start_timeout', ALERT_OBSTACLE_NEAR, ALERT_NEAR_FENCE_EDGE,
 )
 
 
@@ -59,6 +62,9 @@ class SafetyState:
     stale: bool = False
     # Se perdio el IMU y el modo vigente es automatico: velocidad lineal y angular a cero (ver imu_blocks_motion)
     imu_lost_auto: bool = False
+    # Robot fuera del cerco (/geofence/inside false) con un modo automatico vigente: velocidad lineal y angular a cero
+    # (ver fence_blocks_motion). En manual no: hay que poder volver a meterlo
+    outside_fence_auto: bool = False
 
 
 def clamp_magnitude(value: float, limit: float) -> float:
@@ -165,6 +171,8 @@ def apply_safety(v: float, w: float, state: SafetyState, params: SafetyParams,
 
     if state.imu_lost_auto:
         v = w = 0.0                                            # rumbo no confiable: ni avanza ni gira (manual no entra aqui)
+    if state.outside_fence_auto:
+        v = w = 0.0                                            # fuera del cerco en automatico (manual no entra aqui)
 
     # Garantia final: nunca amplificar
     v = clamp_magnitude(v, abs(v_in))
@@ -197,6 +205,31 @@ def imu_is_lost(now: float, last_msg: Optional[float], started: float, timeout: 
 def imu_blocks_motion(active_alerts, mode, mode_fresh: bool) -> bool:
     """Hay que anular el movimiento: alerta imu_lost vigente y modo automatico vigente (manual, idle, stop y modo viejo no)."""
     return ALERT_IMU_LOST in active_alerts and mode_fresh and mode in AUTOMATIC_MODES
+
+
+def fence_blocks_motion(inside: Optional[bool], inside_age: float, fence_status: Optional[str], mode,
+                        mode_fresh: bool, timeout: float) -> bool:
+    """Hay que frenar por el cerco: modo automatico vigente, hay un cerco cargado y /geofence/inside es false (ya con
+    la histeresis de geofence_node) o dejo de llegar (mas viejo que `timeout`: falla segura).
+
+    Sin geofence_node (nunca llego /geofence/status) o sin cerco (NO_POLYGON) no frena: no hay de que estar afuera.
+    En manual, idle, stop o con el modo viejo tampoco."""
+    if not mode_fresh or mode not in AUTOMATIC_MODES:
+        return False
+    if fence_status is None or fence_status == 'NO_POLYGON':
+        return False
+    if inside is None or inside_age > timeout:
+        return True
+    return not inside
+
+
+def fence_alert(blocking: bool, inside: Optional[bool], inside_age: float, fence_status: Optional[str],
+                timeout: float) -> bool:
+    """Publicar outside_fence: cuando se frena por el cerco, y tambien en cualquier otro modo (manual incluido, sin
+    frenar) si el cerco esta OK y /geofence/inside reciente dice false: el robot esta afuera de verdad."""
+    if blocking:
+        return True
+    return fence_status == 'OK' and inside is False and inside_age <= timeout
 
 
 def ignored_sonars(ignore_sides: bool, mode, mode_fresh: bool) -> Tuple[str, ...]:

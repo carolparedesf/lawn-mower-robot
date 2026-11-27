@@ -57,7 +57,8 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
     final center = robotPos != null
         ? LatLng(robotPos.lat, robotPos.lng)
         : _defaultCenter;
-    final geofenceBreach = robotState.currentStatus.hasGeofenceBreach;
+    final outsideFence = robotState.currentStatus.isOutsideFence;
+    final nearFenceEdge = robotState.currentStatus.isNearFenceEdge;
     // Invalid shapes (not just "too few points") are drawn with the error color.
     final problem = geofence.problem;
     final badShape = problem == GeofenceProblem.selfIntersecting ||
@@ -129,10 +130,12 @@ class _GeofenceScreenState extends State<GeofenceScreen> {
                               isFilled: true,
                               color: RoboColors.primary
                                   .withValues(alpha: 0.2),
-                              borderColor: (geofenceBreach || badShape)
+                              borderColor: (outsideFence || badShape)
                                   ? RoboColors.error
-                                  : RoboColors.primary,
-                              borderStrokeWidth: geofenceBreach ? 3 : 3,
+                                  : nearFenceEdge
+                                      ? RoboColors.warning
+                                      : RoboColors.primary,
+                              borderStrokeWidth: 3,
                             ),
                           ],
                         ),

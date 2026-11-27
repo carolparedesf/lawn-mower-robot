@@ -18,6 +18,7 @@ class AlertBanner extends StatelessWidget {
     final Color bg;
     final Color fg;
     final IconData icon;
+    Color? iconColor;
     switch (info.severity) {
       case AlertSeverity.error:
         bg = RoboColors.errorChip;
@@ -27,6 +28,7 @@ class AlertBanner extends StatelessWidget {
         bg = RoboColors.warningChip;
         fg = RoboColors.textSecondary;
         icon = Icons.warning_amber_rounded;
+        iconColor = RoboColors.warning;
       case AlertSeverity.info:
         bg = RoboColors.statusBar;
         fg = RoboColors.textSecondary;
@@ -40,7 +42,7 @@ class AlertBanner extends StatelessWidget {
       color: bg,
       child: Row(
         children: [
-          Icon(icon, size: 16, color: fg),
+          Icon(icon, size: 16, color: iconColor ?? fg),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

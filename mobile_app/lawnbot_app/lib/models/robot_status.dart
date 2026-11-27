@@ -85,7 +85,11 @@ class RobotStatus {
   bool get isEmergencyStopped =>
       estop || alert == 'estop' || alert == 'lifted';
 
-  bool get hasGeofenceBreach => alert == 'geofence_breach';
+  /// Really outside the fence (red): the safety gate stops automatic modes.
+  bool get isOutsideFence => alert == 'outside_fence';
+
+  /// Soft notice (amber): within the fence's inner margin, near the edge.
+  bool get isNearFenceEdge => alert == 'geofence_breach';
 
   bool get isAutonomous => mode.startsWith('auto_');
 

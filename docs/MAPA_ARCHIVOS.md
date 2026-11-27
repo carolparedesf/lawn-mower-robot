@@ -188,7 +188,7 @@ Cadena de las órdenes de movimiento: algoritmos y app → `twist_mux` (elige po
 - `mode_manager.py` / `mode_logic.py`: decide qué modo está activo (manual, paralelo, aleatorio, perimetral) y lo
   avisa a todos.
 - `geofence_node.py` / `geofence_logic.py`: cerco virtual: convierte el polígono de la app (lat/lon) al mapa del
-  robot, dice si está adentro y avisa si se acerca a menos de 1 m del borde.
+  robot, dice si está adentro y avisa si se acerca a menos de 0,5 m del borde.
 - `imu_watchdog.py`: avisa si el IMU deja de publicar y calcula la inclinación para la cuchilla.
 - `sonar_filter.py` / `sonar_filter_logic.py`: limpia las lecturas de los sonares.
 - `robot_events.py` / `events_logic.py`: eventos del robot (levantado, empezó a cortar, etc.) para el buzzer y la

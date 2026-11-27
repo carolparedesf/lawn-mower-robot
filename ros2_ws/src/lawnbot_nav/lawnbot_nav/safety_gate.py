@@ -2,7 +2,10 @@
 """Ultima barrera antes del firmware: filtra /cmd_vel_mux y publica /cmd_vel.
 
 Solo limita o anula velocidades, nunca las amplifica. Publica a ritmo fijo; si la entrada
-esta vieja publica cero. Con la alerta imu_lost (/nav/alert_in, la publica imu_watchdog) y un modo automatico vigente publica cero. Las reglas estan en safety_logic.py y los parametros en el YAML.
+esta vieja publica cero. Con la alerta imu_lost (/nav/alert_in, la publica imu_watchdog) y un modo automatico vigente publica cero.
+Fuera del cerco (/geofence/inside false, con la histeresis de geofence_node) y un modo automatico vigente publica cero y la
+alerta outside_fence; en manual deja mover (para volver a meter el robot; la cuchilla la apaga blade_controller) y
+avisa outside_fence igual si el cerco esta OK. Las reglas estan en safety_logic.py y los parametros en el YAML.
 """
 import time
 
@@ -14,9 +17,9 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
 from sensor_msgs.msg import Range
 from std_msgs.msg import Bool, String
 
-from lawnbot_nav.safety_logic import (SafetyParams, SafetyState, SonarLimiter,
-                                      apply_safety, ignored_sonars, imu_blocks_motion,
-                                      merge_alerts, parse_alert_in)
+from lawnbot_nav.safety_logic import (ALERT_OUTSIDE_FENCE, SafetyParams, SafetyState, SonarLimiter,
+                                      apply_safety, fence_alert, fence_blocks_motion, ignored_sonars,
+                                      imu_blocks_motion, merge_alerts, parse_alert_in)
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -52,6 +55,9 @@ class SafetyGate(Node):
         # En auto_perimeter los sonares laterales no cuentan (el central y los bumpers siguen protegiendo)
         self.declare_parameter('ignore_side_sonars_in_perimeter', True)
         self.declare_parameter('mode_timeout', 3.0)
+        # Freno por cerco en modos automaticos; /geofence/inside sin llegar en este tiempo [s] cuenta como afuera
+        self.declare_parameter('geofence_brake', True)
+        self.declare_parameter('geofence_timeout', 1.0)
         self.declare_parameter('bumper_front_topics',
                                ['bumper/B1_front_left', 'bumper/B2_front_right'])
         self.declare_parameter('bumper_back_topics', ['bumper/B5_back'])
@@ -83,6 +89,12 @@ class SafetyGate(Node):
         self.sensor_timeout = gp('sensor_timeout').value
         self.alert_ttl = gp('alert_ttl').value
         self.external_alerts = {}     # fuente -> (alerta, instante de recepcion)
+        self.geofence_brake = gp('geofence_brake').value
+        self.geofence_timeout = gp('geofence_timeout').value
+        self.inside = None            # ultimo /geofence/inside
+        self.inside_time = 0.0
+        self.fence_status = None      # ultimo /geofence/status (None = geofence_node nunca publico)
+        self.fence_blocking = False
 
         self.v_in = 0.0
         self.w_in = 0.0
@@ -110,6 +122,8 @@ class SafetyGate(Node):
         self.create_subscription(Twist, gp('input_topic').value, self.on_input, 10)
         self.create_subscription(String, 'nav/alert_in', self.on_alert_in, 10)
         self.create_subscription(String, 'nav/active_mode', self.on_mode, LATCHED)
+        self.create_subscription(Bool, 'geofence/inside', self.on_inside, 10)
+        self.create_subscription(String, 'geofence/status', self.on_fence_status, LATCHED)
         self.pub = self.create_publisher(Twist, gp('output_topic').value, 10)
         self.alert_pub = self.create_publisher(String, 'nav/safety_alert', LATCHED)
 
@@ -132,6 +146,13 @@ class SafetyGate(Node):
     def on_mode(self, msg):
         self.active_mode = msg.data
         self.mode_time = time.monotonic()
+
+    def on_inside(self, msg):
+        self.inside = bool(msg.data)
+        self.inside_time = time.monotonic()
+
+    def on_fence_status(self, msg):
+        self.fence_status = msg.data
 
     def on_alert_in(self, msg):
         source, alert = parse_alert_in(msg.data)
@@ -181,9 +202,18 @@ class SafetyGate(Node):
         back = any(self.fresh(self.bumper.get(t), now) and self.bumper[t][0]
                    for t in self.back_topics)
 
-        imu_lost_auto = imu_blocks_motion(active_alerts, self.active_mode, now - self.mode_time <= self.mode_timeout)
-        return SafetyState(sonar_ranges=ranges, front_pressed=front,
-                           back_pressed=back, stale=stale, imu_lost_auto=imu_lost_auto)
+        mode_fresh = now - self.mode_time <= self.mode_timeout
+        imu_lost_auto = imu_blocks_motion(active_alerts, self.active_mode, mode_fresh)
+        outside = self.geofence_brake and fence_blocks_motion(
+            self.inside, now - self.inside_time, self.fence_status, self.active_mode, mode_fresh, self.geofence_timeout)
+        if outside != self.fence_blocking:
+            self.fence_blocking = outside
+            if outside:
+                self.get_logger().warn(f'fuera del cerco en {self.active_mode}: se frena (outside_fence)')
+            else:
+                self.get_logger().info('freno por cerco liberado')
+        return SafetyState(sonar_ranges=ranges, front_pressed=front, back_pressed=back, stale=stale,
+                           imu_lost_auto=imu_lost_auto, outside_fence_auto=outside)
 
     # ── Salida ───────────────────────────────────────────────
 
@@ -198,6 +228,9 @@ class SafetyGate(Node):
         active = {alert for alert, age in external.values() if age <= self.alert_ttl}
         state = self.build_state(now, active)
         v, w, local_alert = apply_safety(v_cmd, w_cmd, state, self.params, limiter=self.limiter, now=now)
+        if fence_alert(state.outside_fence_auto, self.inside, now - self.inside_time, self.fence_status,
+                       self.geofence_timeout):
+            external['safety_gate:geofence'] = (ALERT_OUTSIDE_FENCE, 0.0)
         alert = merge_alerts(local_alert, external, self.alert_ttl)
 
         out = Twist()

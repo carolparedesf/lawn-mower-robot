@@ -55,10 +55,9 @@ try:
     from move_mapping import twist_from_dir
     from status_alert import pick_alert
 except ImportError as exc:
-    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, estop_latch.py, fused_position.py, "
-             "move_mapping.py y status_alert.py juntos a ~/pi/ "
-             "(scp bridge/{bridge,actuator_relay,estop_latch,fused_position,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) "
-             "y reiniciar bridge.service.")
+    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). bridge.py corre desde ~/lawn-mower-robot/bridge/ junto a "
+             "actuator_relay.py, estop_latch.py, fused_position.py, move_mapping.py y status_alert.py: actualizar el repo "
+             "en la Pi (subirpi desde la laptop) y reiniciar bridge.service.")
 
 BROKER = "localhost"
 

@@ -9,7 +9,7 @@ Si la TF o toLL no estan disponibles, se publica el fix crudo de gpsd (con su tr
 "position_source": "fused" (fusionada), "gps_raw" (respaldo) o "none" (sin posicion).
 
 La logica no depende de ROS (se prueba con test_fused_position.py); bridge.py hace las llamadas a ROS y a gpsd.
-Va junto a bridge.py en ~/pi/.
+Va junto a bridge.py (en la Pi: ~/lawn-mower-robot/bridge/).
 """
 import math
 from dataclasses import dataclass

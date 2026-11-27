@@ -38,6 +38,12 @@ safety_gate:
     # vigente (mode_timeout) se vuelven a considerar todos.
     ignore_side_sonars_in_perimeter: true
     mode_timeout: 3.0
+    # Freno por cerco: en auto_random / auto_parallel / auto_perimeter, con /geofence/inside false (histeresis de
+    # geofence_node) se publica cero y la alerta outside_fence. En manual no frena (para volver a meter el robot; la
+    # cuchilla igual queda apagada) pero con el cerco OK avisa outside_fence igual. Sin cerco cargado (NO_POLYGON) o
+    # sin geofence_node no frena.
+    geofence_brake: true
+    geofence_timeout: 1.0     # s sin /geofence/inside (con cerco cargado) = afuera
     # Topic de cada sonar. Vacio = <sonar_topic_prefix>/<left|center|right>. nav.launch.py pone el prefijo en
     # sonar_filtered (use_sonar_filter:=true, por defecto) o sonar (sin filtro)
     sonar_topic_prefix: sonar

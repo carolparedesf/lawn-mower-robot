@@ -81,14 +81,14 @@ def run_geofence_datum():
     alerts = g.pubs['nav/alert_in']
     check(not alerts.sent, 'en el centro: sin geofence_breach')
     def near_edge(n):
-        for _ in range(n):                                  # a 0.6 m del borde sur: dentro del margen
+        for _ in range(n):                                  # a 0.3 m del borde sur: dentro del margen (0.5)
             R.advance(0.1)
-            R.set_pose('map', 'base_footprint', 10.0, 0.6)  # pose fresca en cada ciclo
+            R.set_pose('map', 'base_footprint', 10.0, 0.3)  # pose fresca en cada ciclo
             tick()
 
     near_edge(14)
     check(not alerts.sent and last('geofence/inside').data is True,
-          'franja del margen (0.6 m): sin aviso durante 14 ciclos e inside sigue true')
+          'franja del margen (0.3 m de 0.5): sin aviso durante 14 ciclos e inside sigue true')
     near_edge(1)
     check(alerts.sent and alerts.sent[-1].data == 'geofence:geofence_breach',
           'tras 15 ciclos seguidos en la franja: geofence:geofence_breach por /nav/alert_in')
@@ -366,6 +366,63 @@ def run_gate_alerts():
     check(alert() == 'no_progress', 'alerta vigente dentro del ttl')
     run(2.0)
     check(alert() == 'none', 'si no se renueva, vence a los 3 s')
+
+    print('    freno por cerco')
+
+    def twist(v, w):
+        t = R.Twist()
+        t.linear.x, t.angular.z = v, w
+        return t
+
+    out = g.pubs['cmd_vel']
+    inside = {'value': True}
+
+    def drive(seconds):
+        for _ in range(int(seconds / 0.05)):
+            g.subs['cmd_vel_mux'](twist(0.3, 0.5))
+            g.subs['geofence/inside'](R.Bool(inside['value']))
+            R.advance(0.05)
+            for s, value in sonar.items():
+                g.subs[f'sonar/{s}'](R.Range(value))
+            for b in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+                g.subs[b](R.Bool(False))
+            tick()
+
+    g.subs['geofence/status'](R.String('OK'))
+    for mode in ('auto_random', 'auto_parallel', 'auto_perimeter'):
+        g.subs['nav/active_mode'](R.String(mode))
+        inside['value'] = True
+        drive(0.2)
+        check(out.last.linear.x > 0 and out.last.angular.z > 0 and alert() == 'none', f'{mode} adentro: pasa la orden')
+        inside['value'] = False
+        drive(0.05)
+        check(out.last.linear.x == 0 and out.last.angular.z == 0 and alert() == 'outside_fence',
+              f'{mode} con inside=false: cero en el primer ciclo y outside_fence')
+    g.subs['nav/active_mode'](R.String('manual'))
+    drive(0.2)
+    check(out.last.linear.x > 0 and out.last.angular.z > 0, 'manual afuera: NO frena (para volver a meterlo)')
+    check(alert() == 'outside_fence', '   pero avisa outside_fence (cerco OK)')
+    inside['value'] = True
+    drive(0.2)
+    check(alert() == 'none', 'manual de vuelta adentro: sin alerta')
+    g.subs['nav/active_mode'](R.String('auto_random'))
+    g.subs['geofence/status'](R.String('NO_POLYGON'))
+    inside['value'] = False
+    drive(0.2)
+    check(out.last.linear.x > 0 and alert() == 'none', 'sin cerco (NO_POLYGON): no frena')
+    g.subs['geofence/status'](R.String('OK'))
+    inside['value'] = True
+    drive(0.2)
+    for _ in range(int(1.2 / 0.05)):                # inside deja de llegar
+        g.subs['cmd_vel_mux'](twist(0.3, 0.5))
+        R.advance(0.05)
+        for s, value in sonar.items():
+            g.subs[f'sonar/{s}'](R.Range(value))
+        for b in ('bumper/B1_front_left', 'bumper/B2_front_right'):
+            g.subs[b](R.Bool(False))
+        tick()
+    check(out.last.linear.x == 0 and alert() == 'outside_fence',
+          'con cerco y /geofence/inside sin llegar 1 s: frena (falla segura)')
 
 
 def run_coverage():
