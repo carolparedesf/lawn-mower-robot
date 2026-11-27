@@ -9,6 +9,9 @@ mande por MQTT a robot/map. Una pasada cuenta solo si la cuchilla estaba cortand
 El JSON lleva ademas `origin_ll` [lat, lng]: la latitud/longitud del origen (0, 0) del frame `map`, para que la app ubique la
 grilla en el mapa (x = este, y = norte). Sale del servicio /toLL de navsat_transform y se vuelve a consultar cada
 `origin_refresh_s`; si cambia (otro datum) se actualiza y el mapa se reenvia de inmediato. Sin dato la clave se omite.
+
+La pose sale de /odometry/global (`pose_topic`, 10 Hz, de ekf_global; en simulacion lo publica fake_robot) y no de un
+TransformListener, que recibiria todo /tf a 25 Hz: ver odom_pose.py.
 """
 import json
 import math
@@ -20,13 +23,12 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy, qos_profile_sensor_data)
 from sensor_msgs.msg import Range
 from std_msgs.msg import Float32, Int32, String
-from tf2_ros import Buffer, TransformListener
 
 from lawnbot_nav.coverage_map_logic import CoverageGrid
 from lawnbot_nav.node_utils import spin_with_cleanup
+from lawnbot_nav.odom_pose import DEFAULT_TOPIC as ODOM_TOPIC, OdomPose
 from lawnbot_nav.sensor_cache import SONARS, SensorCache
 from lawnbot_nav.robot_geometry import CORNER_SONAR_ANGLE_DEG, SONAR_MOUNTS, sonar_yaws
-from lawnbot_nav.tf_utils import lookup_pose
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -51,6 +53,7 @@ class CoverageMap(Node):
         d('sonar_topic_prefix', 'sonar')       # 'sonar_filtered' con el filtro de sonares (nav.launch.py)
         d('frame_id', 'map')
         d('base_frame', 'base_footprint')
+        d('pose_topic', ODOM_TOPIC)            # nav_msgs/Odometry de base_frame en frame_id (ekf_global)
         d('pose_timeout', 0.5)
         d('hysteresis', 0.15)
         d('origin_source', 'navsat')           # navsat: servicio toLL | param: origin_lat/origin_lng | none: sin origin_ll
@@ -99,8 +102,7 @@ class CoverageMap(Node):
         self.cache = SensorCache()
         self.last_map_pub = 0.0
         self.last_pose = None
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.odom_pose = OdomPose(self, gp('pose_topic').value, self.frame_id, self.base_frame)
 
         self.passes_pub = self.create_publisher(Int32, 'coverage/cell_passes', 10)
         self.map_pub = self.create_publisher(String, 'coverage/map', 10)
@@ -131,7 +133,7 @@ class CoverageMap(Node):
             self.get_logger().info(f'cerco nuevo: grilla de {self.grid.w} x {self.grid.h} celdas')
 
     def get_pose(self):
-        return lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame, self.pose_timeout)
+        return self.odom_pose.get(self.pose_timeout)
 
     def on_sonar(self, name, msg):
         pose = self.last_pose

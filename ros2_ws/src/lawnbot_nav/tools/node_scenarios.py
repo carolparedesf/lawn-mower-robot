@@ -485,6 +485,7 @@ def run_coverage():
     f.subs['geofence/inside'](R.Bool(True))
     run(0.5)
     check(status() == 'IDLE' and len(c.pubs['follower/path'].sent) == 0, 'fuera de auto_parallel no genera nada')
+    check(c.tf_listener is None, '   ni escucha /tf (TransformListener solo en auto_parallel)')
 
     # cerco no convexo (en L): error claro y ninguna ruta
     fence_pub(L_SHAPE)
@@ -522,10 +523,12 @@ def run_coverage():
     check(ratio > 0.97, 'cobertura de la region de trabajo > 97 %')
     check(min(signed_distance_xy(p, FENCE) for p in trajectory) > 0.3, '   el robot nunca se acerco al borde del cerco a menos de 0,3 m')
 
+    check(c.tf_listener is not None and c.tf_listener.registered, '   en auto_parallel escucha /tf')
     # salir del modo: ruta vacia, markers borrados, estado IDLE
     set_mode('stop')
     run(0.3)
     check(status() == 'IDLE' and len(c.pubs['follower/path'].last.poses) == 0, 'salir de auto_parallel: IDLE y ruta borrada')
+    check(c.tf_listener is None, '   y deja de escuchar /tf')
     check(f.core.route is None, '   y el seguidor se queda sin ruta')
 
     # margen que no deja region
@@ -541,6 +544,36 @@ def run_coverage():
     c3.subs['nav/active_mode'](R.String('idle'))
     c3.subs['nav/active_mode'](R.String('auto_parallel'))
     check(c3.pubs['coverage/status'].last.data == 'ERROR:sin cerco', 'sin cerco -> ERROR:sin cerco')
+
+    # al entrar sin pose todavia (TF recien suscripta): espera la pose y genera apenas llega
+    c5 = make(CoverageParallel, **cov)
+    c5.subs['nav/active_mode'](R.String('idle'))
+    c5.subs['geofence/polygon'](_polygon(FENCE))
+    saved = dict(R.TF['poses'])
+    R.drop_pose('map', 'base_footprint')
+    c5.subs['nav/active_mode'](R.String('auto_parallel'))
+    wait = c5.timer(0.1)
+    check(len(c5.pubs['follower/path'].sent) == 0, 'entrada sin pose: espera antes de generar')
+    R.advance(0.1)
+    wait()
+    check(len(c5.pubs['follower/path'].sent) == 0, '   todavia sin pose: sigue esperando')
+    R.set_pose('map', 'base_footprint', 5.0, 4.0)
+    R.advance(0.1)
+    wait()
+    p5 = c5.pubs['follower/path'].last
+    check(len(p5.poses) > 20 and math.dist((p5.poses[0].pose.position.x, p5.poses[0].pose.position.y), (5.15, 4.0)) < 1e-6,
+          '   llega la pose: genera empezando por la punta mas cercana')
+    c6 = make(CoverageParallel, **cov)
+    c6.subs['nav/active_mode'](R.String('idle'))
+    c6.subs['geofence/polygon'](_polygon(FENCE))
+    R.drop_pose('map', 'base_footprint')
+    c6.subs['nav/active_mode'](R.String('auto_parallel'))
+    for _ in range(11):                                   # 1,1 s > pose_wait_s
+        R.advance(0.1)
+        c6.timer(0.1)()
+    check(c6.pubs['coverage/status'].last.data.startswith('OK lineas='), '   sin pose en pose_wait_s: genera igual (sin punta mas cercana)')
+    R.TF['poses'].clear()
+    R.TF['poses'].update(saved)
 
     # arrancar el nodo ya dentro de auto_parallel no genera (solo la entrada al modo)
     c4 = make(CoverageParallel, **cov)
@@ -820,6 +853,9 @@ def run_blade():
     # La inclinacion llega por imu_watchdog (/imu/data -> /imu/tilt_deg), como en nav.launch.py
     wd = make(ImuWatchdog, **load('imu_watchdog.yaml', 'imu_watchdog'))
     fake_tick, cm_tick, bl_tick, wd_tick = robot_node.timer(0.02), cm.timer(0.1), bl.timer(0.1), wd.timer(0.1)
+    odom_tick = robot_node.timer(0.1)                     # fake_robot en map publica /odometry/global (como ekf_global)
+    check('tf' not in cm.__dict__ and 'tf_listener' not in cm.__dict__ and 'odometry/global' in cm.subs,
+          'coverage_map lee la pose de /odometry/global, sin TransformListener (/tf a 25 Hz en la Pi)')
     check('imu/data' not in bl.subs and 'imu/tilt_deg' in bl.subs,
           'blade_controller no se suscribe a /imu/data (50 Hz): lee /imu/tilt_deg de imu_watchdog')
     drive = robot_node.subs['cmd_vel']
@@ -865,6 +901,8 @@ def run_blade():
             wd_tick()
             for m in wd.pubs['imu/tilt_deg'].sent[n_tilt:]:
                 bl.subs['imu/tilt_deg'](m)
+            odom_tick()
+            cm.subs['odometry/global'](robot_node.pubs['odometry/global'].last)
             cm_tick()
             for m in cm.pubs['coverage/cell_passes'].sent[sent['passes']:]:
                 if 'passes' not in S['mute']:
@@ -1555,12 +1593,12 @@ def run_map_origin():
     client = cm.clients['toLL']
     tick = cm.timer(0.1)
     cm.subs['geofence/polygon'](_polygon([(0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0)]))
-    R.set_pose('map', 'base_footprint', 1.0, 1.0)
+    cm.subs['odometry/global'](R.Odometry(x=1.0, y=1.0))
 
     def run(seconds):
         for _ in range(int(seconds / 0.1)):
             R.advance(0.1)
-            R.set_pose('map', 'base_footprint', 1.0, 1.0)
+            cm.subs['odometry/global'](R.Odometry(x=1.0, y=1.0))
             tick()
 
     def answer(lat, lng):

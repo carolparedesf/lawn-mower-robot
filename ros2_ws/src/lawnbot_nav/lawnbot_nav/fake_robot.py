@@ -16,7 +16,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped, Twist, TransformStamped
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu, Range
@@ -62,6 +62,10 @@ class FakeRobot(Node):
         d('corner_split_deg', 45.0)          # [grados] desde la cara frontal/trasera: hasta aqui el bumper frontal/trasero, luego el lateral
         d('corner_dead_deg', 0.0)            # [grados] zona sin bumper centrada en el split
         d('publish_sensors', False)
+        # Pose simulada tambien como nav_msgs/Odometry (lo que en el robot publica ekf_global), solo con frame_id
+        # 'map': coverage_map y el bridge leen la pose de ahi y no de la TF. '' = no publica
+        d('odom_topic', 'odometry/global')
+        d('odom_rate_hz', 10.0)              # como ekf_global
         # Visualizacion en RViz (solo simulacion): /sim/markers (MarkerArray) y /sim/path (Path), en `frame_id`
         d('publish_markers', False)
         d('markers_rate_hz', 1.0)
@@ -126,6 +130,10 @@ class FakeRobot(Node):
                 self.create_timer(1.0 / gp('imu_rate_hz').value, self.publish_imu)
         self.create_subscription(Twist, gp('cmd_topic').value, self.on_cmd, 10)
         self.create_timer(self.dt, self.tick)
+        self.odom_pub = None
+        if gp('odom_topic').value and self.frame_id == 'map' and gp('odom_rate_hz').value > 0.0:
+            self.odom_pub = self.create_publisher(Odometry, gp('odom_topic').value, 10)
+            self.create_timer(1.0 / gp('odom_rate_hz').value, self.publish_odom)
         self.get_logger().info(
             f"fake_robot: {self.frame_id} -> {self.child_frame}, orden en '{gp('cmd_topic').value}'")
 
@@ -226,6 +234,17 @@ class FakeRobot(Node):
         if self.view is not None:
             self.trail.add(self.robot.x, self.robot.y, self.robot.yaw)
 
+
+    def publish_odom(self):
+        msg = Odometry()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.frame_id
+        msg.child_frame_id = self.child_frame
+        msg.pose.pose.position.x = self.robot.x
+        msg.pose.pose.position.y = self.robot.y
+        msg.pose.pose.orientation.z = math.sin(self.robot.yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(self.robot.yaw / 2.0)
+        self.odom_pub.publish(msg)
 
     def publish_imu(self):
         """IMU ideal: yaw absoluto y velocidad angular z del robot simulado."""

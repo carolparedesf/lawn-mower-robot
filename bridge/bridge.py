@@ -13,8 +13,9 @@ ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
                         blade/trimmer/force_cut pedidos, blade_running/trimmer_running reales y blade_status (texto de
                         /blade/status: por que la cuchilla corre o no; se omite si esta viejo)
-  robot/position     <- posicion FUSIONADA a 1 Hz: TF map->base_footprint (ekf_global) pasada a lat/lng con el servicio
-                        toLL de navsat_transform, y hdg desde el yaw de esa TF (fused_position.py). Sin TF o sin toLL:
+  robot/position     <- posicion FUSIONADA a 1 Hz: la pose de ekf_global (/odometry/global, map -> base_footprint) pasada
+                        a lat/lng con el servicio toLL de navsat_transform, y hdg desde su yaw (fused_position.py). Sin
+                        esa pose o sin toLL:
                         el fix crudo de gpsd (hilo propio, se reconecta cada 2 s) y robot/status.position_source lo avisa
                         ("fused", "gps_raw" o "none"). Solo en simulacion, con --sim-position o LAWNBOT_SIM_POSITION=1:
                         la TF convertida con el datum del geofence_node (sim_position.py); con esa opcion no usa gpsd
@@ -324,7 +325,7 @@ class RobotBridge(Node):
         status["alert"] = pick_alert(self.alert, self.event, now - self.event_time)
         status["estop"] = self.estop_latch.active
         if self.sim_datum is None:
-            # De donde sale robot/position: "fused" (EKF + GPS), "gps_raw" (respaldo, sin TF/toLL) o "none"
+            # De donde sale robot/position: "fused" (EKF + GPS), "gps_raw" (respaldo, sin pose/toLL) o "none"
             status["position_source"] = self.position.source(now)
         # Estado de los actuadores: "blade"/"trimmer" son lo pedido y aceptado (la app arma su proximo comando a partir
         # de ellos); "*_running" es si el motor esta corriendo de verdad (puede estar apagado por una condicion)
@@ -341,9 +342,14 @@ class RobotBridge(Node):
     # ── Posicion ──────────────────────────────────────────────
 
     def setup_fused_position(self):
-        """TF map->base_footprint y cliente de toLL (navsat_transform). Si faltan los modulos, solo GPS crudo."""
+        """Pose de ekf_global y cliente de toLL (navsat_transform). Si faltan los modulos, solo GPS crudo.
+
+        La pose sale de /odometry/global (10 Hz; el callback solo guarda el ultimo mensaje) y no de un
+        TransformListener: en la Pi cada mensaje recibido cuesta ~3 ms de CPU en rclpy y /tf llega a 25 Hz
+        (ekf_local + ekf_global). Es la misma pose que la TF map->base_footprint (la calcula ekf_global).
+        """
         try:
-            from tf2_ros import Buffer, TransformListener
+            from nav_msgs.msg import Odometry
             from robot_localization.srv import ToLL
             from sensor_msgs.msg import NavSatFix, NavSatStatus
         except ImportError as exc:
@@ -352,8 +358,8 @@ class RobotBridge(Node):
             self.get_logger().warn(f"Sin posicion fusionada ({exc}): robot/position usa el GPS crudo de gpsd")
             return
         self.ToLL = ToLL
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.odom = None                        # ultimo /odometry/global (se lee en el timer de 1 Hz)
+        self.create_subscription(Odometry, fused_position.ODOM_TOPIC, self.on_odom, qos_profile_sensor_data)
         self.toll_client = self.create_client(ToLL, fused_position.TOLL_SERVICE)
         # Solo para el diagnostico: sin /gps/fix navsat_transform no arma su transformacion y toLL responde (0, 0)
         self.create_subscription(
@@ -361,27 +367,33 @@ class RobotBridge(Node):
             lambda m: self.diag.on_gps_fix(m.status.status >= NavSatStatus.STATUS_FIX, time.monotonic()),
             qos_profile_sensor_data)
 
+    def on_odom(self, msg):
+        self.odom = msg
+
     def lookup_fused_pose(self):
-        """(x, y, yaw) de base_footprint en map, o None si falta la TF o esta vieja."""
+        """(x, y, yaw) de base_footprint en map segun ekf_global, o None si falta o esta vieja."""
         from rclpy.time import Time
-        try:
-            # Time() = la ultima TF disponible (no la del instante actual, que todavia no llego)
-            tf = self.tf_buffer.lookup_transform(fused_position.MAP_FRAME, fused_position.BASE_FRAME, Time())
-        except Exception as exc:
-            self.diag.set_fused(fused_position.FUSED_TF_MISSING,
-                                f"falta la TF {fused_position.MAP_FRAME}->{fused_position.BASE_FRAME} "
-                                f"({type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}); ekf_global publica map->odom")
+        msg = self.odom
+        if msg is None:
+            self.diag.set_fused(fused_position.FUSED_POSE_MISSING,
+                                f"no llega /{fused_position.ODOM_TOPIC} (ekf_global no publica)")
             return None
-        stamp = tf.header.stamp
+        frames = (msg.header.frame_id.lstrip('/'), msg.child_frame_id.lstrip('/'))
+        if frames != (fused_position.MAP_FRAME, fused_position.BASE_FRAME):
+            self.diag.set_fused(fused_position.FUSED_POSE_MISSING,
+                                f"/{fused_position.ODOM_TOPIC} viene en {frames[0]}->{frames[1]}, se esperaba "
+                                f"{fused_position.MAP_FRAME}->{fused_position.BASE_FRAME}")
+            return None
+        stamp = msg.header.stamp
         if stamp.sec != 0 or stamp.nanosec != 0:
             age = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds * 1e-9
-            if age > fused_position.TF_TIMEOUT_S:
-                self.diag.set_fused(fused_position.FUSED_TF_STALE,
-                                    f"la TF {fused_position.MAP_FRAME}->{fused_position.BASE_FRAME} tiene {age:.1f} s "
-                                    f"(limite {fused_position.TF_TIMEOUT_S:.1f} s)")
+            if age > fused_position.POSE_TIMEOUT_S:
+                self.diag.set_fused(fused_position.FUSED_POSE_STALE,
+                                    f"el ultimo /{fused_position.ODOM_TOPIC} tiene {age:.1f} s "
+                                    f"(limite {fused_position.POSE_TIMEOUT_S:.1f} s)")
                 return None
-        t = tf.transform
-        return t.translation.x, t.translation.y, fused_position.yaw_from_quaternion(t.rotation)
+        p = msg.pose.pose
+        return p.position.x, p.position.y, fused_position.yaw_from_quaternion(p.orientation)
 
     def publish_position(self):
         """1 Hz: pide la conversion de la pose fusionada (la respuesta llega a on_toll) y publica la mejor fuente vigente."""
@@ -428,7 +440,7 @@ class RobotBridge(Node):
         changed = source != self.position_source
         if changed and source == fused_position.SOURCE_FUSED:
             self.get_logger().info(fused_position.source_change_message(self.position_source, source))
-        # Sin la fusionada: CUAL falta (TF, toLL, /gps/fix, gpsd) y por que; al cambiar y cada DIAG_REPEAT_S
+        # Sin la fusionada: CUAL falta (pose de ekf_global, toLL, /gps/fix, gpsd) y por que; al cambiar y cada DIAG_REPEAT_S
         reason = self.diag.report(source, self.position, now)
         if reason is not None:
             self.get_logger().warn(reason)

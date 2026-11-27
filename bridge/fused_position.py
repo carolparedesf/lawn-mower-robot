@@ -1,11 +1,13 @@
 """robot/position desde la localizacion FUSIONADA (EKF + GPS), con el GPS crudo de gpsd como respaldo.
 
-La pose sale de la TF map -> base_footprint (ekf_global) y se pasa a lat/lng con el servicio toLL de navsat_transform:
-es la misma transformacion (mismo datum) con la que geofence_node pasa el cerco de lat/lng a `map` (fromLL), asi el
-robot se dibuja en la app en el mismo lugar donde lo ve el cerco. El rumbo (hdg) sale del yaw de esa TF: el rumbo
-del GPS (track) no sirve a las velocidades del robot (menos de 1 m/s).
+La pose sale de ekf_global (/odometry/global: base_footprint en map, la misma pose que la TF map -> base_footprint)
+y se pasa a lat/lng con el servicio toLL de navsat_transform: es la misma transformacion (mismo datum) con la que
+geofence_node pasa el cerco de lat/lng a `map` (fromLL), asi el robot se dibuja en la app en el mismo lugar donde lo
+ve el cerco. El rumbo (hdg) sale del yaw de esa pose: el rumbo del GPS (track) no sirve a las velocidades del robot
+(menos de 1 m/s). Se usa /odometry/global (10 Hz) y no un TransformListener (/tf a 25 Hz) porque en la Pi cada
+mensaje que recibe rclpy cuesta ~3 ms de CPU.
 
-Si la TF o toLL no estan disponibles, se publica el fix crudo de gpsd (con su track) y robot/status lo avisa en
+Si la pose o toLL no estan disponibles, se publica el fix crudo de gpsd (con su track) y robot/status lo avisa en
 "position_source": "fused" (fusionada), "gps_raw" (respaldo) o "none" (sin posicion).
 
 La logica no depende de ROS (se prueba con test_fused_position.py); bridge.py hace las llamadas a ROS y a gpsd.
@@ -22,7 +24,8 @@ SOURCE_NONE = 'none'
 POSITION_PERIOD_S = 1.0     # robot/position a 1 Hz (como antes con gpsd)
 MAP_FRAME = 'map'
 BASE_FRAME = 'base_footprint'
-TF_TIMEOUT_S = 1.0          # TF map -> base_footprint mas vieja que esto = no disponible (ekf_global va a 10 Hz)
+ODOM_TOPIC = 'odometry/global'   # salida de ekf_global (map -> base_footprint)
+POSE_TIMEOUT_S = 1.0        # pose mas vieja que esto = no disponible (ekf_global va a 10 Hz)
 FUSED_STALE_S = 2.5         # sin una respuesta valida de toLL en este tiempo se pasa al GPS crudo
 RAW_STALE_S = 3.0           # fix de gpsd mas viejo que esto no se publica
 TOLL_SERVICE = 'toLL'
@@ -70,7 +73,7 @@ class PositionSelector:
         self.raw: Optional[Fix] = None
 
     def on_fused(self, lat, lng, yaw, now):
-        """Respuesta de toLL para una pose de la TF. False si la respuesta no es una posicion valida."""
+        """Respuesta de toLL para una pose de ekf_global. False si la respuesta no es una posicion valida."""
         if not valid_lat_lng(lat, lng) or not math.isfinite(yaw):
             return False
         self.fused = Fix(float(lat), float(lng), heading_deg(yaw), now)
@@ -105,8 +108,8 @@ GPS_FIX_TOPIC = 'gps/fix'   # lo que le llega a navsat_transform (gps_node ya fi
 
 # Motivos por los que falta la posicion fusionada (clave del motivo; el texto lleva el detalle)
 FUSED_NO_MODULES = 'sin_modulos'
-FUSED_TF_MISSING = 'tf_falta'
-FUSED_TF_STALE = 'tf_vieja'
+FUSED_POSE_MISSING = 'pose_falta'
+FUSED_POSE_STALE = 'pose_vieja'
 FUSED_TOLL_NOT_READY = 'toll_no_disponible'
 FUSED_TOLL_ZERO = 'toll_cero'
 FUSED_TOLL_TIMEOUT = 'toll_sin_respuesta'
@@ -211,8 +214,8 @@ def source_change_message(old, new):
     if old == new:
         return None
     texts = {
-        SOURCE_FUSED: 'robot/position: posicion FUSIONADA (TF map->base_footprint + toLL de navsat_transform)',
-        SOURCE_GPS_RAW: 'robot/position: sin TF map->base_footprint o sin toLL; se usa el GPS CRUDO de gpsd',
-        SOURCE_NONE: 'robot/position: sin posicion (ni TF fusionada ni fix de gpsd)',
+        SOURCE_FUSED: 'robot/position: posicion FUSIONADA (pose de ekf_global + toLL de navsat_transform)',
+        SOURCE_GPS_RAW: 'robot/position: sin pose de ekf_global o sin toLL; se usa el GPS CRUDO de gpsd',
+        SOURCE_NONE: 'robot/position: sin posicion (ni fusionada ni fix de gpsd)',
     }
     return texts[new]

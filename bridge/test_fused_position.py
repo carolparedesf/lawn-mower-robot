@@ -105,7 +105,7 @@ class Diagnostico(unittest.TestCase):
         self.assertIn('hace 5 s, SIN fix', self.d.fused_text(50.0))
 
     def test_solo_repite_al_cambiar_el_motivo_o_cada_tanto(self):
-        self.d.set_fused(fp.FUSED_TF_MISSING, 'falta la TF')
+        self.d.set_fused(fp.FUSED_POSE_MISSING, "no llega /odometry/global")
         self.assertIsNotNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 1.0))
         self.assertIsNone(self.d.report(fp.SOURCE_GPS_RAW, self.sel, 2.0))
         self.d.set_fused(fp.FUSED_TOLL_ZERO, 'cero')
@@ -233,6 +233,53 @@ class PuenteFusionado(unittest.TestCase):
         self.assertIn('el servicio toLL no esta disponible', f.log.lines[-1][1])
         self.assertIn('Tampoco hay GPS crudo', f.log.lines[-1][1])
 
+
+
+@unittest.skipUnless(HAVE_ROS, 'rclpy/paho no disponibles')
+class PoseDeEkfGlobal(unittest.TestCase):
+    """lookup_fused_pose lee el ultimo /odometry/global (sin TransformListener)."""
+
+    def make(self, odom, now_s=100.0):
+        from rclpy.clock import ClockType
+        from rclpy.time import Time
+
+        class Fake:
+            lookup_fused_pose = RobotBridge.lookup_fused_pose
+            get_clock = lambda s: SimpleNamespace(now=lambda: Time(seconds=now_s, clock_type=ClockType.ROS_TIME))
+
+        f = Fake()
+        f.odom = odom
+        f.diag = fp.Diagnosis(0.0)
+        return f
+
+    @staticmethod
+    def odom(frame='map', child='base_footprint', sec=100, yaw=math.pi / 2):
+        from builtin_interfaces.msg import Time as Stamp
+        q = SimpleNamespace(x=0.0, y=0.0, z=math.sin(yaw / 2), w=math.cos(yaw / 2))
+        return SimpleNamespace(
+            header=SimpleNamespace(frame_id=frame, stamp=Stamp(sec=sec, nanosec=0)),
+            child_frame_id=child,
+            pose=SimpleNamespace(pose=SimpleNamespace(position=SimpleNamespace(x=1.0, y=2.0), orientation=q)))
+
+    def test_pose_vigente(self):
+        x, y, yaw = self.make(self.odom()).lookup_fused_pose()
+        self.assertEqual((x, y), (1.0, 2.0))
+        self.assertAlmostEqual(yaw, math.pi / 2)
+
+    def test_sin_mensaje(self):
+        f = self.make(None)
+        self.assertIsNone(f.lookup_fused_pose())
+        self.assertEqual(f.diag.fused[0], fp.FUSED_POSE_MISSING)
+
+    def test_frames_equivocados(self):
+        f = self.make(self.odom(frame='odom'))
+        self.assertIsNone(f.lookup_fused_pose())
+        self.assertIn('odom->base_footprint', f.diag.fused[1])
+
+    def test_pose_vieja(self):
+        f = self.make(self.odom(sec=98))
+        self.assertIsNone(f.lookup_fused_pose())
+        self.assertEqual(f.diag.fused[0], fp.FUSED_POSE_STALE)
 
 if __name__ == '__main__':
     unittest.main()

@@ -88,6 +88,18 @@ class PoseStamped:
         self.pose.position.x, self.pose.position.y = x, y
 
 
+class Odometry:
+    def __init__(self, frame_id='map', child='base_footprint', x=0.0, y=0.0, yaw=0.0, stamp_ns=None):
+        self.header = Header()
+        self.header.frame_id = frame_id
+        ns = CLOCK['ns'] if stamp_ns is None else stamp_ns
+        self.header.stamp = Msg(sec=ns // 10**9, nanosec=ns % 10**9)
+        self.child_frame_id = child
+        self.pose = Msg(pose=Pose())
+        self.pose.pose.position.x, self.pose.pose.position.y = x, y
+        self.pose.pose.orientation.z, self.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+
+
 class Path:
     def __init__(self, frame_id='map', points=()):
         self.header = Header()
@@ -447,7 +459,7 @@ def install():
     _module('visualization_msgs')
     _module('visualization_msgs.msg', Marker=Marker, MarkerArray=MarkerArray)
     _module('nav_msgs')
-    _module('nav_msgs.msg', Path=Path)
+    _module('nav_msgs.msg', Path=Path, Odometry=Odometry)
     _module('sensor_msgs')
     _module('sensor_msgs.msg', Range=Range, Imu=Imu, BatteryState=BatteryState)
     _module('std_msgs')

@@ -19,3 +19,4 @@ coverage_parallel:
     frame_id: map
     base_frame: base_footprint
     pose_timeout: 0.5
+    pose_wait_s: 1.0             # al entrar a auto_parallel espera la pose (la TF solo se escucha en ese modo)

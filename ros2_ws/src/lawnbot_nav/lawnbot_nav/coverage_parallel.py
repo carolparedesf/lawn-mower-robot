@@ -5,6 +5,10 @@ Lee /geofence/polygon (poligono convexo en `map`) y publica la ruta en /follower
 para RViz en /coverage/markers y el resultado en /coverage/status. Fuera de auto_parallel no hace
 nada. Si el cerco no sirve (no convexo, region vacia, sin cerco) publica ERROR con la causa y una
 ruta vacia (que borra cualquier ruta vieja del seguidor). No mueve el robot: lo hace el seguidor.
+
+La pose (para empezar por la punta mas cercana) solo se usa al generar, asi que la TF se escucha solo mientras
+auto_parallel esta activo: en la Pi un TransformListener siempre prendido recibe /tf a 25 Hz y cuesta ~10 % de un
+nucleo. Al entrar al modo espera la pose hasta pose_wait_s (normalmente llega en menos de 0,1 s) y genera.
 """
 import math
 import time
@@ -49,6 +53,7 @@ class CoverageParallel(Node):
         d('frame_id', 'map')
         d('base_frame', 'base_footprint')
         d('pose_timeout', 0.5)
+        d('pose_wait_s', 1.0)              # al entrar al modo: espera la pose hasta esto antes de generar
 
         gp = self.get_parameter
         self.params = CoverageParams(
@@ -60,6 +65,7 @@ class CoverageParallel(Node):
         self.frame_id = gp('frame_id').value
         self.base_frame = gp('base_frame').value
         self.pose_timeout = gp('pose_timeout').value
+        self.pose_wait_s = gp('pose_wait_s').value
 
         self.polygon = None
         self.polygon_frame_ok = True
@@ -70,7 +76,10 @@ class CoverageParallel(Node):
         self.last_alert = 0.0
 
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.tf_listener = None             # solo en auto_parallel
+        self.wait_since = None              # esperando la pose para generar (entrada al modo)
+        self.wait_timer = self.create_timer(0.1, self.wait_pose)
+        self.wait_timer.cancel()
 
         self.path_pub = self.create_publisher(Path, 'follower/path', LATCHED)
         self.markers_pub = self.create_publisher(MarkerArray, 'coverage/markers', LATCHED)
@@ -94,7 +103,7 @@ class CoverageParallel(Node):
         if not self.polygon_frame_ok and points:
             self.get_logger().warn(
                 f"cerco en el frame '{msg.header.frame_id}', se esperaba '{self.frame_id}'")
-        if self.pending:
+        if self.pending and self.wait_since is None:
             self.attempt()                  # el cerco llego (o cambio) mientras se esperaba
 
     def on_mode(self, msg):
@@ -107,11 +116,42 @@ class CoverageParallel(Node):
             self.active = True
             self.pending = True
             self.get_logger().info(f'modo {MODE}: generando la ruta de cobertura')
-            self.attempt()
+            self.start_tf()
+            if self.get_pose() is not None:
+                self.attempt()
+            else:                           # TF recien suscripta: se espera la pose (wait_pose)
+                self.wait_since = time.monotonic()
+                self.wait_timer.reset()
         elif mode != MODE and prev == MODE:
             self.active = False
             self.pending = False
+            self.stop_waiting()
+            self.stop_tf()
             self.clear()
+
+    def start_tf(self):
+        if self.tf_listener is None:
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+
+    def stop_tf(self):
+        if self.tf_listener is not None:
+            self.tf_listener.unregister()
+            self.tf_listener = None
+
+    def stop_waiting(self):
+        self.wait_since = None
+        self.wait_timer.cancel()
+
+    def wait_pose(self):
+        """10 Hz solo mientras se espera la pose al entrar al modo: genera al tenerla o a los pose_wait_s."""
+        if self.wait_since is None:
+            self.wait_timer.cancel()
+            return
+        if self.get_pose() is None and time.monotonic() - self.wait_since < self.pose_wait_s:
+            return
+        self.stop_waiting()
+        if self.active and self.pending:
+            self.attempt()
 
     # ── Generacion ───────────────────────────────────────────
 

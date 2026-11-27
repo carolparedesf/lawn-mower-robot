@@ -211,6 +211,8 @@ Cadena de las órdenes de movimiento: algoritmos y app → `twist_mux` (elige po
 **Utilidades compartidas**
 - `node_utils.py`: arranque y apagado comunes (al cerrar, los nodos mandan velocidad cero).
 - `tf_utils.py`: pedir la posición del robot.
+- `odom_pose.py`: la posición del robot desde `/odometry/global` (10 Hz), más barata que escuchar `/tf` (25 Hz) en la Pi.
+  La usa `coverage_map`; el bridge hace lo mismo con su propio código.
 - `sensor_cache.py`: últimas lecturas de sensores con su antigüedad.
 - `robot_geometry.py`: medidas del chasis y posición de los sonares.
 
