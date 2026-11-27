@@ -13,9 +13,11 @@ ROS -> MQTT:
   robot/status       <- modo (/nav/active_mode), bateria (/battery/state), alerta (/nav/safety_alert),
                         blade/trimmer/force_cut pedidos, blade_running/trimmer_running reales y blade_status (texto de
                         /blade/status: por que la cuchilla corre o no; se omite si esta viejo)
-  robot/position     <- gpsd (hilo propio, sin cambios). Solo en simulacion, con --sim-position o LAWNBOT_SIM_POSITION=1:
-                        la TF map->base_footprint convertida a lat/lng con el datum del geofence_node (sim_position.py);
-                        con esa opcion no se conecta a gpsd
+  robot/position     <- posicion FUSIONADA a 1 Hz: TF map->base_footprint (ekf_global) pasada a lat/lng con el servicio
+                        toLL de navsat_transform, y hdg desde el yaw de esa TF (fused_position.py). Sin TF o sin toLL:
+                        el fix crudo de gpsd (hilo propio, se reconecta cada 2 s) y robot/status.position_source lo avisa
+                        ("fused", "gps_raw" o "none"). Solo en simulacion, con --sim-position o LAWNBOT_SIM_POSITION=1:
+                        la TF convertida con el datum del geofence_node (sim_position.py); con esa opcion no usa gpsd
   robot/status.estop <- true mientras se recuerde un e-stop: un 'lifted' (/robot/events) o un /estop true, hasta que se
                         publique /estop false (estop_latch.py)
   robot/status.alert <- tambien /robot/events (lifted, low_battery...) por unos segundos si no hay alerta de seguridad
@@ -47,13 +49,16 @@ except ImportError:                                 # en simulacion (portatil) p
     gpsd = None
 
 try:
+    import fused_position
     from actuator_relay import ActuatorRelay, mode_allows_actuators
     from estop_latch import EstopLatch, is_release_command
     from move_mapping import twist_from_dir
     from status_alert import pick_alert
 except ImportError as exc:
-    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, estop_latch.py, move_mapping.py y status_alert.py "
-             "juntos a ~/pi/ (scp bridge/{bridge,actuator_relay,estop_latch,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) y reiniciar bridge.service.")
+    sys.exit(f"bridge.py: falta un modulo auxiliar ({exc}). Hay que copiar bridge.py, actuator_relay.py, estop_latch.py, fused_position.py, "
+             "move_mapping.py y status_alert.py juntos a ~/pi/ "
+             "(scp bridge/{bridge,actuator_relay,estop_latch,fused_position,move_mapping,status_alert}.py mow@<ip-de-la-pi>:~/pi/) "
+             "y reiniciar bridge.service.")
 
 BROKER = "localhost"
 
@@ -128,10 +133,17 @@ class RobotBridge(Node):
         self.create_timer(ENABLE_PERIOD_S, self.publish_enables)
         self.publish_mode()
 
+        self.position = fused_position.PositionSelector()
+        self.position_source = None             # ultima fuente informada (para loguear solo los cambios)
+        self.toll_pending = False               # hay una llamada a toLL sin respuesta
+        self.toll_sent = 0.0
+        self.toll_client = None
         if self.sim_datum is None:
-            # GPS thread
+            self.setup_fused_position()
+            # GPS crudo de respaldo (hilo propio)
             self.gps_thread = threading.Thread(target=self.gps_loop, daemon=True)
             self.gps_thread.start()
+            self.create_timer(fused_position.POSITION_PERIOD_S, self.publish_position)
         else:
             # Simulacion: sin gpsd; la pose sale de la TF map -> base_footprint
             import sim_position
@@ -311,6 +323,9 @@ class RobotBridge(Node):
             status["battery"] = int(round(self.battery_pct))
         status["alert"] = pick_alert(self.alert, self.event, now - self.event_time)
         status["estop"] = self.estop_latch.active
+        if self.sim_datum is None:
+            # De donde sale robot/position: "fused" (EKF + GPS), "gps_raw" (respaldo, sin TF/toLL) o "none"
+            status["position_source"] = self.position.source(now)
         # Estado de los actuadores: "blade"/"trimmer" son lo pedido y aceptado (la app arma su proximo comando a partir
         # de ellos); "*_running" es si el motor esta corriendo de verdad (puede estar apagado por una condicion)
         blade, trimmer, force_cut = self.relay.outputs(self.actuator_mode_ok())
@@ -323,7 +338,72 @@ class RobotBridge(Node):
             status["blade_status"] = self.blade_status
         self.mqtt.publish("robot/status", json.dumps(status), qos=1)
 
-    # ── GPS ───────────────────────────────────────────────────
+    # ── Posicion ──────────────────────────────────────────────
+
+    def setup_fused_position(self):
+        """TF map->base_footprint y cliente de toLL (navsat_transform). Si faltan los modulos, solo GPS crudo."""
+        try:
+            from tf2_ros import Buffer, TransformListener
+            from robot_localization.srv import ToLL
+        except ImportError as exc:
+            self.get_logger().warn(f"Sin posicion fusionada ({exc}): robot/position usa el GPS crudo de gpsd")
+            return
+        self.ToLL = ToLL
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.toll_client = self.create_client(ToLL, fused_position.TOLL_SERVICE)
+
+    def lookup_fused_pose(self):
+        """(x, y, yaw) de base_footprint en map, o None si falta la TF o esta vieja."""
+        from rclpy.time import Time
+        try:
+            tf = self.tf_buffer.lookup_transform(fused_position.MAP_FRAME, fused_position.BASE_FRAME, Time())
+        except Exception:
+            return None
+        stamp = tf.header.stamp
+        if stamp.sec != 0 or stamp.nanosec != 0:
+            age = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds * 1e-9
+            if age > fused_position.TF_TIMEOUT_S:
+                return None
+        t = tf.transform
+        return t.translation.x, t.translation.y, fused_position.yaw_from_quaternion(t.rotation)
+
+    def publish_position(self):
+        """1 Hz: pide la conversion de la pose fusionada (la respuesta llega a on_toll) y publica la mejor fuente vigente."""
+        if self.toll_pending and time.monotonic() - self.toll_sent > fused_position.FUSED_STALE_S:
+            self.toll_pending = False           # navsat_transform no respondio (se cayo a mitad de la llamada)
+        if self.toll_client is not None and not self.toll_pending and self.toll_client.service_is_ready():
+            pose = self.lookup_fused_pose()
+            if pose is not None:
+                x, y, yaw = pose
+                req = self.ToLL.Request()
+                req.map_point.x = float(x)
+                req.map_point.y = float(y)
+                req.map_point.z = 0.0
+                self.toll_pending = True
+                self.toll_sent = time.monotonic()
+                self.toll_client.call_async(req).add_done_callback(lambda fut, yaw=yaw: self.on_toll(fut, yaw))
+                return                          # se publica al llegar la respuesta
+        self.send_position()
+
+    def on_toll(self, future, yaw):
+        self.toll_pending = False
+        try:
+            ll = future.result().ll_point
+            self.position.on_fused(ll.latitude, ll.longitude, yaw, time.monotonic())
+        except Exception:
+            pass
+        self.send_position()
+
+    def send_position(self):
+        source, position = self.position.payload(time.monotonic())
+        msg = fused_position.source_change_message(self.position_source, source)
+        if msg is not None:
+            (self.get_logger().info if source == fused_position.SOURCE_FUSED else self.get_logger().warn)(msg)
+            self.position_source = source
+            self.publish_status()
+        if position is not None:
+            self.mqtt.publish("robot/position", json.dumps(position), qos=0)
 
     def publish_sim_position(self):
         sp = self.sim_position
@@ -334,20 +414,32 @@ class RobotBridge(Node):
         self.mqtt.publish("robot/position", json.dumps(position), qos=0)
 
     def gps_loop(self):
-        gpsd.connect()
+        """Fix crudo de gpsd (respaldo). Si gpsd no esta (arranco antes) o se cae, reintenta cada GPSD_RETRY_S."""
+        warned = False
         while True:
             try:
-                packet = gpsd.get_current()
-                if packet.mode >= 2:
-                    position = {
-                        "lat": packet.lat,
-                        "lng": packet.lon,
-                        "hdg": getattr(packet, 'track', 0.0) or 0.0
-                    }
-                    self.mqtt.publish("robot/position", json.dumps(position), qos=0)
-            except Exception:
-                pass
-            time.sleep(1)
+                gpsd.connect()
+            except Exception as exc:
+                if not warned:
+                    self.get_logger().warn(f"gpsd no disponible ({exc}); reintento cada {fused_position.GPSD_RETRY_S:.0f} s")
+                    warned = True
+                time.sleep(fused_position.GPSD_RETRY_S)
+                continue
+            self.get_logger().info("Conectado a gpsd")
+            warned = False
+            while True:
+                try:
+                    packet = gpsd.get_current()
+                except (OSError, ValueError) as exc:     # gpsd se cayo (socket roto o respuesta vacia): reconectar
+                    self.get_logger().warn(f"Se perdio gpsd ({exc}); reintento cada {fused_position.GPSD_RETRY_S:.0f} s")
+                    warned = True
+                    break
+                except Exception:                       # sin GPS activo o sin datos todavia: sigue conectado
+                    packet = None
+                if packet is not None and packet.mode >= 2:
+                    self.position.on_raw(packet.lat, packet.lon, getattr(packet, 'track', None), time.monotonic())
+                time.sleep(1)
+            time.sleep(fused_position.GPSD_RETRY_S)
 
 
 def _raise_interrupt(signum, frame):

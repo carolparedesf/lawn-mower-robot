@@ -72,6 +72,8 @@ Corre en la Pi como servicio (`bridge.service`). Traduce los mensajes MQTT de la
 
 - `bridge.py`: el puente. Recibe órdenes de la app (mover, modo, e-stop, cerco, cuchilla) y publica el estado del
   robot, la posición y el mapa para la app.
+- `fused_position.py`: de dónde sale la posición que ve la app: la del filtro (EKF + GPS) pasada a lat/lng; si no
+  está, el GPS crudo de `gpsd`.
 - `move_mapping.py`: convierte la orden del joystick `{dir, speed}` en velocidad lineal y angular.
 - `estop_latch.py`: recuerda si el e-stop está activo, para informarlo a la app.
 - `status_alert.py`: elige qué alerta se muestra en la app cuando hay varias.
@@ -186,7 +188,7 @@ Cadena de las órdenes de movimiento: algoritmos y app → `twist_mux` (elige po
 - `mode_manager.py` / `mode_logic.py`: decide qué modo está activo (manual, paralelo, aleatorio, perimetral) y lo
   avisa a todos.
 - `geofence_node.py` / `geofence_logic.py`: cerco virtual: convierte el polígono de la app (lat/lon) al mapa del
-  robot y dice si está adentro.
+  robot, dice si está adentro y avisa si se acerca a menos de 1 m del borde.
 - `imu_watchdog.py`: avisa si el IMU deja de publicar y calcula la inclinación para la cuchilla.
 - `sonar_filter.py` / `sonar_filter_logic.py`: limpia las lecturas de los sonares.
 - `robot_events.py` / `events_logic.py`: eventos del robot (levantado, empezó a cortar, etc.) para el buzzer y la
@@ -263,6 +265,8 @@ etc.). Además:
 - `launch/berryimu_gps.launch.py`: arranca el IMU y el GPS.
 - `berryimu_gps/imu_node.py`: lee el BerryIMU y publica `/imu/data`.
 - `berryimu_gps/gps_node.py`: lee el GPS (a través de `gpsd`) y publica `/gps/fix`.
+- `berryimu_gps/gps_filter.py`: descarta los fixes malos del GPS (2D, error alto, saltos) y calcula su covarianza.
+- `config/gps.yaml`: límites de ese filtro (error máximo, HDOP, velocidad máxima).
 - `berryimu_gps/calibrate_accel.py`, `calibrate_gyro.py`, `calibrate_mag.py`: calibración del acelerómetro,
   giroscopio y magnetómetro.
 - `config/imu_calibration.yaml`: resultados de esa calibración.

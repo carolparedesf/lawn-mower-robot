@@ -497,7 +497,7 @@ en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de 
    robot quede dentro del cerco con al menos `--margin` (0,4 m) hasta el borde. Si algo falla imprime el motivo, **no** imprime comandos y sale con código 2 (1 si no puede leer el cerco).
    Con `room` el cerco tiene que caber en 10 × 8 m y contener el arranque (2, 1) con margen. No hace falta ROS. Si `nav.launch.py` ya estaba corriendo con otro datum, reiniciarlo: `geofence_node` no aplica el datum en caliente.
 
-   **Posición del robot en la app (simulación).** `robot/position` sale de gpsd y en simulación no hay GPS, así que el robot no aparece en el mapa de la app. El bridge tiene una opción, **apagada por defecto**,
+   **Posición del robot en la app (simulación).** En el robot real `robot/position` sale de la TF `map -> base_footprint` pasada a lat/lng con el servicio `toLL` de navsat_transform (y del GPS crudo de gpsd si no hay TF; ver `bridge/fused_position.py`). En simulación no hay GPS ni navsat, así que el robot no aparece en el mapa de la app. El bridge tiene una opción, **apagada por defecto**,
    que toma la pose de la TF `map → base_footprint`, la convierte a lat/lng con el **mismo datum** que `geofence_node` (modo `datum`, misma `meters_per_degree`, así el robot cae dentro del cerco dibujado) y publica
    `robot/position` a 1 Hz con el JSON de siempre `{"lat", "lng", "hdg"}`. El rumbo `hdg` es como el de gpsd (grados desde el norte, sentido horario; yaw 0 = este = 90°). Con la opción activa **no se conecta a gpsd**
    (ni hace falta tenerlo instalado); si no hay TF o es vieja (> 2 s) no publica nada. Sin la opción el bridge es el de siempre y no necesita `sim_position.py` ni `lawnbot_nav`.
@@ -720,9 +720,9 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   (≈ 6,7 Hz) mientras está presionado. El joystick llama a su `listener` cada 100 ms (`period` por defecto de
   `flutter_joystick` 0.1.0, también con el stick quieto) y la app publica con un retardo de 50 ms: ≈ 10 Hz.
   Ambos quedan bien por debajo de los 0,5 s de `twist_mux`, `safety_gate` y del watchdog del firmware.
-- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `estop_latch.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
+- **Despliegue del bridge:** copiar **todos** los `.py` de `bridge/` a la Pi, junto a `bridge.py` (`~/pi/`): `bridge.py`, `actuator_relay.py`, `estop_latch.py`, `fused_position.py`, `move_mapping.py` y `status_alert.py` (los tests `test_*.py` no hacen falta). Con backup del `bridge.py` anterior, y luego
   `sudo systemctl restart bridge.service`. Si falta un auxiliar, `bridge.py` **no arranca** y dice cuál falta (`journalctl -u bridge.service -n 20`).
   ```bash
-  scp bridge/bridge.py bridge/actuator_relay.py bridge/estop_latch.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
+  scp bridge/bridge.py bridge/actuator_relay.py bridge/estop_latch.py bridge/fused_position.py bridge/move_mapping.py bridge/status_alert.py mow@<ip-de-la-pi>:~/pi/
   ```
   Hasta entonces la Pi sigue con el bridge viejo.

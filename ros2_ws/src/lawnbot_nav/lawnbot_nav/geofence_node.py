@@ -3,6 +3,9 @@
 
 Publica /geofence/polygon (PolygonStamped), /geofence/inside (Bool), /geofence/distance_to_edge
 (Float32, positiva dentro y negativa fuera, NaN si se desconoce) y /geofence/status (String).
+Con el robot a menos de inner_margin_m del borde durante breach_cycles lecturas seguidas (o ya
+afuera, de inmediato) avisa 'geofence:geofence_breach' por /nav/alert_in; es solo un aviso (llega a
+la app en robot/status.alert): inside y distance_to_edge siguen midiendo el borde real.
 El cerco se guarda siempre en lat/lon y se reconvierte con el servicio fromLL de
 navsat_transform cada vez que este vuelve a estar disponible. No mueve el robot, asi que corre en
 cualquier modo. Sin pose, sin poligono o con el poligono sin reconvertir, `inside` es false.
@@ -19,8 +22,9 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
 from std_msgs.msg import Bool, Float32, String
 from tf2_ros import Buffer, TransformListener
 
-from lawnbot_nav.geofence_logic import (STATUS_INVALID, STATUS_NO_POLYGON, STATUS_NO_POSE,
-                                        STATUS_OK, STATUS_WAITING, Hysteresis,
+from lawnbot_nav.geofence_logic import (ALERT_BREACH, STATUS_INVALID, STATUS_NO_POLYGON,
+                                        STATUS_NO_POSE, STATUS_OK, STATUS_WAITING,
+                                        BreachMonitor, Hysteresis,
                                         drop_closing_vertex, lat_lon_to_local_xy,
                                         load_geofence, parse_geofence_json, save_geofence,
                                         signed_distance, validate_polygon)
@@ -48,6 +52,8 @@ class GeofenceNode(Node):
         d('rate_hz', 10.0)
         d('hysteresis_in', 5)               # lecturas consecutivas "dentro" para pasar a true
         d('hysteresis_out', 2)              # lecturas consecutivas "fuera" para pasar a false
+        d('inner_margin_m', 1.0)            # franja interior que dispara geofence_breach [m]
+        d('breach_cycles', 15)              # lecturas seguidas en la franja antes de avisar
         d('min_vertices', 4)
         d('min_edge_length', 0.5)
         d('min_area', 2.0)
@@ -70,6 +76,8 @@ class GeofenceNode(Node):
         self.reconvert_period = gp('reconvert_period_s').value
         self.persist_path = gp('persist_path').value
         self.hyst = Hysteresis(gp('hysteresis_in').value, gp('hysteresis_out').value)
+        self.breach = BreachMonitor(gp('inner_margin_m').value, gp('breach_cycles').value)
+        self.breach_reported = False
 
         # Estado del cerco
         self.raw = []                 # [(lat, lng)], siempre en lat/lon
@@ -96,6 +104,7 @@ class GeofenceNode(Node):
         self.inside_pub = self.create_publisher(Bool, 'geofence/inside', 10)
         self.distance_pub = self.create_publisher(Float32, 'geofence/distance_to_edge', 10)
         self.status_pub = self.create_publisher(String, 'geofence/status', LATCHED)
+        self.alert_pub = self.create_publisher(String, 'nav/alert_in', 10)
         self.create_subscription(String, 'geofence_raw', self.on_raw, LATCHED)
 
         self.create_timer(1.0 / gp('rate_hz').value, self.tick)
@@ -254,6 +263,7 @@ class GeofenceNode(Node):
         self.inside_pub.publish(Bool(data=bool(inside)))
         self.distance_pub.publish(Float32(data=float(distance)))
         self.publish_status(self.compute_status(pose))
+        self.publish_breach(None if raw_inside is None else distance)
 
     # ── Salidas ──────────────────────────────────────────────
 
@@ -264,6 +274,23 @@ class GeofenceNode(Node):
         if self.poly is not None and not self.stale:
             msg.polygon.points = [Point32(x=float(x), y=float(y), z=0.0) for x, y in self.poly]
         self.polygon_pub.publish(msg)
+
+    def publish_breach(self, distance):
+        """geofence_breach se renueva en cada ciclo mientras dure (vence en safety_gate a los
+        alert_ttl s); al terminar se publica 'none' una vez para borrarla enseguida."""
+        active = self.breach.update(distance)
+        if active:
+            self.alert_pub.publish(String(data=f'geofence:{ALERT_BREACH}'))
+        elif self.breach_reported:
+            self.alert_pub.publish(String(data='geofence:none'))
+        if active != self.breach_reported:
+            if active:
+                where = 'afuera' if distance < 0.0 else f'a {distance:.2f} m del borde'
+                self.get_logger().warn(f'geofence_breach: robot {where} '
+                                       f'(margen interno {self.breach.margin:.2f} m)')
+            else:
+                self.get_logger().info('geofence_breach terminado')
+        self.breach_reported = active
 
     def publish_status(self, status, force=False):
         now = time.monotonic()

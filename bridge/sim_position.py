@@ -1,4 +1,4 @@
-"""robot/position desde la pose de la simulacion (solo pruebas; el robot real usa gpsd).
+"""robot/position desde la pose de la simulacion (solo pruebas; el robot real usa fused_position.py: toLL de navsat).
 
 Con la opcion activa, bridge.py toma la TF map -> base_footprint y la convierte a lat/lng con el MISMO datum y la misma
 escala (meters_per_degree) que geofence_node en modo datum, asi el robot se ve dentro del cerco que dibujo la app.
@@ -9,8 +9,8 @@ Requiere el paquete lawnbot_nav (geofence_logic).
   LAWNBOT_SIM_POSITION=1 LAWNBOT_DATUM_LAT=-25.3 LAWNBOT_DATUM_LNG=-57.6 python3 bridge.py
 """
 import argparse
-import math
 
+from fused_position import heading_deg
 from lawnbot_nav.geofence_logic import lat_lon_to_local_xy, meters_per_degree  # noqa: F401  (lat_lon_to_local_xy: para tests)
 
 TRUE_VALUES = ('1', 'true', 'yes', 'on')
@@ -54,9 +54,6 @@ def xy_to_lat_lon(x, y, datum_lat, datum_lng):
     return datum_lat + y / m_per_deg_lat, datum_lng + x / m_per_deg_lng
 
 
-def heading_deg(yaw):
-    """Rumbo como lo da gpsd (grados desde el norte, en sentido horario) a partir del yaw de ROS (desde el este, antihorario)."""
-    return (90.0 - math.degrees(yaw)) % 360.0
 
 
 def position_payload(x, y, yaw, datum_lat, datum_lng):

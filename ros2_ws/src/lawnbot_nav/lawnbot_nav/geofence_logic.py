@@ -224,6 +224,42 @@ class Hysteresis:
         return self.state
 
 
+# ── Alerta de margen interno ─────────────────────────────────
+
+ALERT_BREACH = 'geofence_breach'
+
+
+class BreachMonitor:
+    """Alerta geofence_breach: el robot esta a menos de `margin` m del borde (o afuera).
+
+    Dentro de la franja del margen alerta recien tras `cycles` lecturas seguidas (el error del GPS
+    no la dispara con un solo fix malo); claramente afuera (distancia < 0) alerta de inmediato.
+    Sin dato (None) no alerta: de eso ya se ocupan /geofence/status e inside=false. Solo avisa:
+    /geofence/inside y distance_to_edge no cambian.
+    """
+
+    def __init__(self, margin: float = 1.0, cycles: int = 15):
+        self.margin = max(0.0, float(margin))
+        self.cycles = max(1, int(cycles))
+        self.count = 0
+        self.active = False
+
+    def update(self, distance: Optional[float]) -> bool:
+        if distance is None or math.isnan(distance):
+            self.count = 0
+            self.active = False
+        elif distance < 0.0:
+            self.count = self.cycles
+            self.active = True
+        elif distance < self.margin:
+            self.count = min(self.count + 1, self.cycles)
+            self.active = self.count >= self.cycles
+        else:
+            self.count = 0
+            self.active = False
+        return self.active
+
+
 # ── Persistencia (siempre en lat/lon) ────────────────────────
 
 def save_geofence(path: str, points_lat_lng: Sequence[Tuple[float, float]]) -> None:

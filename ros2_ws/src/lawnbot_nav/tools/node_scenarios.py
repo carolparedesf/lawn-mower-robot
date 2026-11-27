@@ -78,8 +78,29 @@ def run_geofence_datum():
     check(last('geofence/inside').data is True, 'robot en el centro: inside=true')
     check(abs(last('geofence/distance_to_edge').data - 10.0) < 0.5, 'distancia al borde ~10 m (positiva)')
 
+    alerts = g.pubs['nav/alert_in']
+    check(not alerts.sent, 'en el centro: sin geofence_breach')
+    def near_edge(n):
+        for _ in range(n):                                  # a 0.6 m del borde sur: dentro del margen
+            R.advance(0.1)
+            R.set_pose('map', 'base_footprint', 10.0, 0.6)  # pose fresca en cada ciclo
+            tick()
+
+    near_edge(14)
+    check(not alerts.sent and last('geofence/inside').data is True,
+          'franja del margen (0.6 m): sin aviso durante 14 ciclos e inside sigue true')
+    near_edge(1)
+    check(alerts.sent and alerts.sent[-1].data == 'geofence:geofence_breach',
+          'tras 15 ciclos seguidos en la franja: geofence:geofence_breach por /nav/alert_in')
+    R.set_pose('map', 'base_footprint', 10.0, 11.0)
+    run(1)
+    check(alerts.sent[-1].data == 'geofence:none', 'de vuelta al centro: geofence:none')
+    n_alerts = len(alerts.sent)
+
     R.set_pose('map', 'base_footprint', 40.0, 11.0)
     run(1)
+    check(alerts.sent[n_alerts].data == 'geofence:geofence_breach',
+          'claramente afuera: geofence_breach en el primer ciclo (sin esperar)')
     check(last('geofence/inside').data is True, 'primera lectura fuera: la histeresis sostiene true')
     run(2)
     check(last('geofence/inside').data is False, 'tras 2 lecturas fuera: inside=false')

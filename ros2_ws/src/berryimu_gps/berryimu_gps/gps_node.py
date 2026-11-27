@@ -1,36 +1,73 @@
 #!/usr/bin/env python3
-"""Lee gpsd (JSON sobre TCP, puerto 2947) y publica sensor_msgs/NavSatFix en /gps/fix."""
+"""
+Lee gpsd (JSON sobre TCP, puerto 2947) y publica sensor_msgs/NavSatFix en /gps/fix.
+
+Antes de publicar filtra los fixes malos (2D, eph o HDOP altos, saltos imposibles) y pasa los
+errores de gpsd (95 %) a sigma para la covarianza: ver gps_filter.py. Sin fix publica
+STATUS_NO_FIX; un fix descartado no se publica.
+"""
 import json
 import math
 import socket
 import threading
 import time
+from collections import Counter
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
+from berryimu_gps.gps_filter import REJECT_NO_FIX, FilterParams, FixFilter
+
+REJECT_LOG_PERIOD_S = 10.0      # resumen de fixes descartados en el log
+
 
 class GpsNode(Node):
-    def __init__(self):
-        super().__init__('berryimu_gps_node')
+    def __init__(self, **kwargs):
+        super().__init__('berryimu_gps_node', **kwargs)
 
         self.declare_parameter('gpsd_host', '127.0.0.1')
         self.declare_parameter('gpsd_port', 2947)
         self.declare_parameter('frame_id', 'BerryGPS_Link')
+        defaults = FilterParams()
+        # epx/epy/eph/epv de gpsd son al 95 %: sigma = ep * ep_to_sigma
+        self.declare_parameter('ep_to_sigma', defaults.ep_to_sigma)
         # Piso del sigma [m]: evita covarianza ~0 si gpsd reporta epx/epy muy chicos
-        self.declare_parameter('min_sigma_m', 0.5)
+        self.declare_parameter('min_sigma_m', defaults.min_sigma_m)
         # Sigma usado si gpsd no entrega epx/epy ni eph [m]
-        self.declare_parameter('fallback_sigma_m', 10.0)
-        # Varianza vertical cuando no hay epv (fix 2D) [m^2]
-        self.declare_parameter('fallback_vertical_variance', 1.0e4)
+        self.declare_parameter('fallback_sigma_m', defaults.fallback_sigma_m)
+        # Varianza vertical cuando no hay epv [m^2]
+        self.declare_parameter('fallback_vertical_variance', defaults.fallback_vertical_variance)
+        # Fixes que se descartan: 2D, eph mayor que esto [m], HDOP mayor que esto
+        # (<= 0 desactiva cada limite)
+        self.declare_parameter('require_3d', defaults.require_3d)
+        self.declare_parameter('max_eph_m', defaults.max_eph_m)
+        self.declare_parameter('max_hdop', defaults.max_hdop)
+        # Saltos: se rechaza si se aleja del ultimo fix aceptado mas que
+        # max_speed * dt + jump_sigmas * sigma; tras jump_accept_after rechazos seguidos se acepta
+        # igual (0 desactiva el rechazo de saltos)
+        self.declare_parameter('max_speed', defaults.max_speed)
+        self.declare_parameter('jump_sigmas', defaults.jump_sigmas)
+        self.declare_parameter('jump_accept_after', defaults.jump_accept_after)
 
-        self.host = self.get_parameter('gpsd_host').value
-        self.port = self.get_parameter('gpsd_port').value
-        self.frame_id = self.get_parameter('frame_id').value
-        self.min_sigma = self.get_parameter('min_sigma_m').value
-        self.fallback_sigma = self.get_parameter('fallback_sigma_m').value
-        self.fallback_vvar = self.get_parameter('fallback_vertical_variance').value
+        gp = self.get_parameter
+        self.host = gp('gpsd_host').value
+        self.port = gp('gpsd_port').value
+        self.frame_id = gp('frame_id').value
+        self.filter = FixFilter(FilterParams(
+            ep_to_sigma=float(gp('ep_to_sigma').value),
+            min_sigma_m=float(gp('min_sigma_m').value),
+            fallback_sigma_m=float(gp('fallback_sigma_m').value),
+            fallback_vertical_variance=float(gp('fallback_vertical_variance').value),
+            require_3d=bool(gp('require_3d').value),
+            max_eph_m=float(gp('max_eph_m').value),
+            max_hdop=float(gp('max_hdop').value),
+            max_speed=float(gp('max_speed').value),
+            jump_sigmas=float(gp('jump_sigmas').value),
+            jump_accept_after=int(gp('jump_accept_after').value),
+        ))
+        self.rejected = Counter()
+        self.last_reject_log = time.monotonic()
 
         self.fix_pub = self.create_publisher(NavSatFix, 'gps/fix', 10)
 
@@ -71,17 +108,26 @@ class GpsNode(Node):
             return
         if report.get('class') == 'TPV':
             self.publish_fix(report)
+        elif report.get('class') == 'SKY':
+            self.filter.on_sky(report)
 
     # ── NavSatFix ────────────────────────────────────────────
 
-    def publish_fix(self, tpv):
+    def publish_fix(self, tpv, now=None):
+        now = time.monotonic() if now is None else now
+        decision = self.filter.check(tpv, now)
+        if decision.accepted and decision.detail:
+            self.get_logger().warn(f'GPS: {decision.detail}')
+        if not decision.accepted and decision.reason != REJECT_NO_FIX:
+            self.note_rejected(decision, now)
+            return
+
         msg = NavSatFix()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self.frame_id
         msg.status.service = NavSatStatus.SERVICE_GPS
 
-        mode = tpv.get('mode', 0)
-        if mode < 2 or 'lat' not in tpv or 'lon' not in tpv:
+        if not decision.accepted:
             msg.status.status = NavSatStatus.STATUS_NO_FIX
             msg.latitude = math.nan
             msg.longitude = math.nan
@@ -103,29 +149,30 @@ class GpsNode(Node):
         msg.longitude = float(tpv['lon'])
         msg.altitude = float(tpv.get('altMSL', tpv.get('alt', 0.0)) or 0.0)
 
-        # Covarianza ENU: epx = error este (longitud), epy = error norte (latitud)
-        epx = tpv.get('epx')
-        epy = tpv.get('epy')
-        known = epx is not None and epy is not None
-        if not known:
-            eph = tpv.get('eph')
-            epx = epy = eph if eph is not None else self.fallback_sigma
-        sx = max(float(epx), self.min_sigma)
-        sy = max(float(epy), self.min_sigma)
-
-        epv = tpv.get('epv')
-        vvar = max(float(epv), self.min_sigma) ** 2 if epv is not None else self.fallback_vvar
-
+        # Covarianza ENU: x = este (epx, longitud), y = norte (epy, latitud)
+        sx, sy = decision.sigma_x, decision.sigma_y
         msg.position_covariance = [
             sx * sx, 0.0, 0.0,
             0.0, sy * sy, 0.0,
-            0.0, 0.0, vvar,
+            0.0, 0.0, decision.vertical_variance,
         ]
         msg.position_covariance_type = (
-            NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN if known
+            NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN if decision.known
             else NavSatFix.COVARIANCE_TYPE_APPROXIMATED)
 
         self.fix_pub.publish(msg)
+
+    def note_rejected(self, decision, now):
+        """Cuenta los descartes y los resume en el log cada REJECT_LOG_PERIOD_S."""
+        self.rejected[decision.reason] += 1
+        self.last_reject_detail = decision.detail or decision.reason
+        if now - self.last_reject_log >= REJECT_LOG_PERIOD_S:
+            summary = ', '.join(f'{k}: {v}' for k, v in sorted(self.rejected.items()))
+            elapsed = now - self.last_reject_log
+            self.get_logger().warn(f'GPS: fixes descartados en {elapsed:.0f} s ({summary}); '
+                                   f'ultimo: {self.last_reject_detail}')
+            self.rejected.clear()
+            self.last_reject_log = now
 
     def destroy_node(self):
         self._stop.set()

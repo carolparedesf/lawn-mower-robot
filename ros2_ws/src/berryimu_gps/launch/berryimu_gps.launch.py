@@ -10,6 +10,7 @@ def generate_launch_description():
         'config',
         'imu_calibration.yaml'
     )
+    gps_config = os.path.join(get_package_share_directory('berryimu_gps'), 'config', 'gps.yaml')
 
     imu_node = Node(
         package='berryimu_gps',
@@ -24,6 +25,7 @@ def generate_launch_description():
         executable='gps_node',
         name='berryimu_gps_node',
         output='screen',
+        parameters=[gps_config],
     )
 
     return LaunchDescription([imu_node, gps_node])

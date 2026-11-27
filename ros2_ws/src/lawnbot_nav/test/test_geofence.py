@@ -5,7 +5,7 @@ import random
 import tempfile
 import unittest
 
-from lawnbot_nav.geofence_logic import (Hysteresis, distance_to_boundary, drop_closing_vertex, polygon_centroid,
+from lawnbot_nav.geofence_logic import (BreachMonitor, Hysteresis, distance_to_boundary, drop_closing_vertex, polygon_centroid,
                                         lat_lon_to_local_xy, load_geofence, parse_geofence_json,
                                         point_in_polygon, save_geofence, segments_intersect,
                                         signed_area, signed_distance, validate_polygon)
@@ -139,6 +139,41 @@ class GeometryTests(unittest.TestCase):
         self.assertAlmostEqual(north, 110.9, delta=0.5)              # 0,001 grado de latitud ~ 111 m
         east, _ = lat_lon_to_local_xy(-25.3, -57.599, -25.3, -57.6)
         self.assertAlmostEqual(east, 100.4, delta=0.5)               # 0,001 grado de longitud a 25 S
+
+
+class BreachMonitorTests(unittest.TestCase):
+    def test_lejos_del_borde_no_avisa(self):
+        b = BreachMonitor(margin=1.0, cycles=15)
+        self.assertFalse(any(b.update(3.0) for _ in range(100)))
+
+    def test_en_la_franja_avisa_tras_n_ciclos_seguidos(self):
+        b = BreachMonitor(margin=1.0, cycles=15)
+        out = [b.update(0.6) for _ in range(15)]
+        self.assertEqual(out, [False] * 14 + [True])
+
+    def test_un_salto_suelto_no_avisa(self):
+        b = BreachMonitor(margin=1.0, cycles=15)
+        # un fix malo de 1 s (10 ciclos a 10 Hz) dentro de la franja, y vuelve
+        seq = [2.0] * 5 + [0.5] * 10 + [2.0] * 5 + [0.5] * 10
+        self.assertFalse(any(b.update(d) for d in seq))
+
+    def test_afuera_avisa_de_inmediato(self):
+        b = BreachMonitor(margin=1.0, cycles=15)
+        self.assertTrue(b.update(-0.05))
+        self.assertTrue(b.update(0.5))             # al volver a la franja sigue avisando
+        self.assertFalse(b.update(1.2))            # y termina al salir de la franja
+
+    def test_sin_dato_no_avisa(self):
+        b = BreachMonitor(margin=1.0, cycles=3)
+        b.update(-1.0)
+        self.assertFalse(b.update(None))
+        self.assertFalse(b.update(math.nan))
+        self.assertEqual([b.update(0.5) for _ in range(3)], [False, False, True])
+
+    def test_margen_cero_solo_avisa_afuera(self):
+        b = BreachMonitor(margin=0.0, cycles=15)
+        self.assertFalse(any(b.update(0.01) for _ in range(50)))
+        self.assertTrue(b.update(-0.01))
 
 
 class HysteresisTests(unittest.TestCase):

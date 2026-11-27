@@ -18,6 +18,7 @@ try:
     RobotBridge = _module.RobotBridge
     from actuator_relay import ActuatorRelay
     from estop_latch import EstopLatch
+    import fused_position
     HAVE_ROS = True
 except (ImportError, SystemExit):
     HAVE_ROS = False
@@ -62,6 +63,8 @@ class EstopFlow(unittest.TestCase):
         fake.blade_status, fake.blade_status_time = None, 0.0
         fake.relay = ActuatorRelay()
         fake.motor_cmd = {}
+        fake.sim_datum = None
+        fake.position = fused_position.PositionSelector()
         published = []
         fake.mqtt = SimpleNamespace(publish=lambda topic, payload, **kw: published.append((topic, json.loads(payload))))
         fake.calls, fake.published = calls, published

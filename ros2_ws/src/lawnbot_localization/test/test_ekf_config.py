@@ -52,6 +52,13 @@ class EkfConfigTests(unittest.TestCase):
             self.assertEqual((p['two_d_mode'], p['world_frame']), (True, world))
             self.assertFalse(p['odom0_differential'] or p['odom0_relative'] or p['imu0_differential'] or p['imu0_relative'])
 
+    def test_ekf_global_rechaza_gps_incoherente(self):
+        p = load('ekf_global')
+        self.assertEqual(p['odom1_pose_rejection_threshold'], 3.0)
+        # solo el GPS: ruedas e IMU sin rechazo (no se agregaron umbrales a otros sensores)
+        self.assertFalse([k for k in p if 'rejection_threshold' in k and not k.startswith('odom1_')])
+        self.assertFalse([k for k in load('ekf_local') if 'rejection_threshold' in k])
+
     def test_frecuencias_para_la_pi(self):
         # La Pi 4 no llegaba a 30 Hz ("Failed to meet update rate!")
         self.assertEqual(load('ekf_local')['frequency'], 15.0)

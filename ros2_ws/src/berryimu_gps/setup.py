@@ -11,7 +11,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-	(os.path.join('share', package_name, 'config'), ['config/imu_calibration.yaml']),
+        (os.path.join('share', package_name, 'config'),
+            ['config/imu_calibration.yaml', 'config/gps.yaml']),
 	(os.path.join('share', package_name, 'launch'), ['launch/berryimu_gps.launch.py']),
 
     ],

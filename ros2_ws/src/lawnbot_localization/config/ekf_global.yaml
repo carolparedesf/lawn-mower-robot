@@ -48,3 +48,6 @@ ekf_global:
     odom1_differential: false
     odom1_relative: false
     odom1_queue_size: 10
+    # Rechazo de GPS incoherente: se ignora una medicion cuya distancia de Mahalanobis al estado
+    # (con la covarianza del filtro + la del fix) supera esto. 3.0 ~ fuera de 3 sigma.
+    odom1_pose_rejection_threshold: 3.0
