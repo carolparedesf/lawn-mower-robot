@@ -416,13 +416,25 @@ def _module(name, **attrs):
     return m
 
 
+class FakeExecutor:
+    """node_utils.spin_with_cleanup gira con spin_once; aca el primer giro equivale a Ctrl+C (sale enseguida y corre
+    el apagado, como hacia el spin falso)."""
+
+    def add_node(self, node):
+        self.node = node
+
+    def spin_once(self, timeout_sec=None):
+        raise KeyboardInterrupt
+
+
 def install():
     """Instala los modulos falsos y un time.monotonic/sleep controlados."""
     _module('rclpy', init=lambda *a, **k: None, spin=lambda n: None, try_shutdown=lambda: None,
             ok=lambda: True)
     _module('rclpy.node', Node=NodeBase)
     _module('rclpy.serialization', deserialize_message=lambda data, typ: data)   # raw=True entrega el objeto tal cual
-    _module('rclpy.executors', ExternalShutdownException=type('ExternalShutdownException', (Exception,), {}))
+    _module('rclpy.executors', ExternalShutdownException=type('ExternalShutdownException', (Exception,), {}),
+            SingleThreadedExecutor=FakeExecutor)
     _module('rclpy.qos', DurabilityPolicy=Msg(TRANSIENT_LOCAL=1), HistoryPolicy=Msg(KEEP_LAST=1),
             QoSProfile=lambda **k: None, ReliabilityPolicy=Msg(RELIABLE=1),
             qos_profile_sensor_data=None)

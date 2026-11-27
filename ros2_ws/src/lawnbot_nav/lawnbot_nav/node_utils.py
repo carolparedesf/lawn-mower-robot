@@ -2,7 +2,13 @@
 import signal
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
+
+# Cada cuanto despierta el lazo aunque no llegue nada. Hace falta porque el manejador de senales es de Python y
+# solo corre cuando la espera de rclpy (en C) devuelve: un nodo sin timers activos (sonar_filter, o random_walk /
+# perimeter inactivos) se quedaba dormido para siempre y no se enteraba de Ctrl+C ni de SIGTERM.
+WAKE_S = 0.5
 
 
 def _stop(signum, frame):
@@ -19,7 +25,10 @@ def spin_with_cleanup(make_node, args=None):
     node = None
     try:
         node = make_node()
-        rclpy.spin(node)
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        while rclpy.ok():
+            executor.spin_once(timeout_sec=WAKE_S)
     except KeyboardInterrupt:
         pass
     finally:
