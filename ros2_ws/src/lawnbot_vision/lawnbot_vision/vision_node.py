@@ -122,8 +122,8 @@ class VisionNode(Node):
 
         if not params.calibrated:
             self.get_logger().warn(
-                'calibrated=false: /vision/obstacles sale VACIO (las distancias no son confiables). Correr calibrar.py, '
-                'cargar calib_y/calib_d y camara en el YAML y poner calibrated: true')
+                'calibrated=false: /vision/obstacles sale VACIO (las distancias no son confiables). Correr '
+                '`ros2 run lawnbot_vision calibrar` y pegar en el YAML lo que imprime (calibrated: true, calib_y, calib_d)')
         if gp('start_capture').value:
             self.thread = threading.Thread(target=self.capture_loop, daemon=True)
             self.thread.start()

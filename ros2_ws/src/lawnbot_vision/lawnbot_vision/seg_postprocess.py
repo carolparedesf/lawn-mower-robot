@@ -136,7 +136,7 @@ def base_point(mask: np.ndarray, lb: Letterbox):
     ymax = ys.max()
     near = ys >= ymax - 2.0 * lb.gain
     # pixel de la entrada -> pixel de la imagen original (sin medio pixel: asi lo hace ultralytics con masks.xy,
-    # y calibrar.py midio calib_y con eso)
+    # y el calibrar.py viejo midio calib_y con eso)
     x = xs[near].mean() / lb.gain
     y = ymax / lb.gain
     return float(min(x, lb.orig_w - 1)), float(min(y, lb.orig_h - 1))

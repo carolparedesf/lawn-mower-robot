@@ -23,7 +23,6 @@ setup(
     entry_points={
         'console_scripts': [
             'mode_manager = lawnbot_nav.mode_manager:main',
-            'nav_stub = lawnbot_nav.nav_stub:main',
             'safety_gate = lawnbot_nav.safety_gate:main',
             'waypoint_follower = lawnbot_nav.waypoint_follower:main',
             'fake_robot = lawnbot_nav.fake_robot:main',

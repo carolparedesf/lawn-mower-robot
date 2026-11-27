@@ -46,3 +46,6 @@ export.log
 
 # Indices de VS Code C++ (pueden pesar GB)
 *.vc.db
+
+# Archivos temporales del editor (VS Code / IntelliSense)
+firmware/.vscode/browse.vc.db*

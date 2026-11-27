@@ -26,17 +26,9 @@ def generate_launch_description():
         'datum_lng': ParameterValue(LaunchConfiguration('datum_lng'), value_type=float),
     }
 
-    # Cadena: bridge -> /cmd_vel_manual, stubs -> /cmd_vel_<patron>
+    # Cadena: bridge -> /cmd_vel_manual, algoritmos -> /cmd_vel_<algoritmo>
     #         twist_mux -> /cmd_vel_mux -> safety_gate -> /cmd_vel (unico publicador) -> ESP32
-    # Los tres modos automaticos tienen nodo real (coverage_parallel + waypoint_follower, random_walk,
-    # perimeter). Los stubs a ciegas quedan apagados salvo use_<modo>_stub:=true; encenderlos junto
-    # al nodo real daria dos publicadores en el mismo /cmd_vel_<algoritmo>.
-    stubs = [
-        Node(package='lawnbot_nav', executable='nav_stub', name=f'nav_stub_{p}',
-             output='screen', parameters=[cfg('nav_stubs.yaml'), use_sim_time],
-             condition=IfCondition(LaunchConfiguration(f'use_{p}_stub')))
-        for p in ('parallel', 'random', 'perimeter')
-    ]
+    # Los tres modos automaticos tienen nodo real: coverage_parallel + waypoint_follower, random_walk y perimeter.
 
     # Vision real (lawnbot_vision) OPCIONAL, apagada por defecto hasta probarla. Si esta encendida, vision_stub no se
     # lanza aunque se pida (publican los mismos topics). FindPackageShare solo se resuelve si vision:=true.
@@ -52,9 +44,6 @@ def generate_launch_description():
         DeclareLaunchArgument('geofence_conversion_mode', default_value='navsat'),
         DeclareLaunchArgument('datum_lat', default_value='0.0'),
         DeclareLaunchArgument('datum_lng', default_value='0.0'),
-        DeclareLaunchArgument('use_parallel_stub', default_value='false'),
-        DeclareLaunchArgument('use_random_stub', default_value='false'),
-        DeclareLaunchArgument('use_perimeter_stub', default_value='false'),
         # Camara sin calibrar: vision_stub publica obstaculos vacios y grass_present=false (la cuchilla no enciende)
         DeclareLaunchArgument('use_vision_stub', default_value='false'),
         # PELIGRO: con true el stub afirma que hay pasto sin ninguna deteccion. Solo para pruebas de banco con los
@@ -64,8 +53,6 @@ def generate_launch_description():
 
         Node(package='lawnbot_nav', executable='mode_manager', name='mode_manager',
              output='screen', parameters=[cfg('mode_manager.yaml'), use_sim_time]),
-
-        *stubs,
 
         Node(package='lawnbot_nav', executable='sonar_filter', name='sonar_filter',
              output='screen', parameters=[cfg('sonar_filter.yaml'), use_sim_time],

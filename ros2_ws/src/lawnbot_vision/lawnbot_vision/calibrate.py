@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calibracion de distancia de la camara para vision_node (reemplaza a vision/pi_scripts/calibrar.py).
+"""Calibracion de distancia de la camara para vision_node (reemplazo del viejo vision/pi_scripts/calibrar.py).
 
 Usa EXACTAMENTE lo mismo que vision_node: el detector NCNN (detector.NcnnSegDetector), el punto de apoyo
 (seg_postprocess.base_point), la camara (detector.Camera, por su nombre fijo y con V4L2) y los parametros de

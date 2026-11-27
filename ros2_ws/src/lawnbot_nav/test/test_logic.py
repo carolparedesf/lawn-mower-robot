@@ -3,7 +3,6 @@ import random
 import unittest
 
 from lawnbot_nav.mode_logic import resolve_mode
-from lawnbot_nav.nav_patterns import ParallelPattern, PerimeterPattern, RandomPattern
 from lawnbot_nav.safety_logic import (SafetyParams, SafetyState, apply_safety,
                                       sonar_scale)
 
@@ -90,25 +89,6 @@ class ModeTests(unittest.TestCase):
 
     def test_modo_desconocido(self):
         self.assertEqual(resolve_mode('volar', 0.5, 3.0), 'idle')
-
-
-class PatternTests(unittest.TestCase):
-    def test_paralelo(self):
-        p = ParallelPattern()
-        self.assertEqual(p.command(0.0), (0.3, 0.0))
-        self.assertEqual(p.command(3.5), (0.0, 1.0))
-        self.assertEqual(p.command(4.5), (0.3, 0.0))
-        self.assertEqual(p.command(7.5), (0.0, -1.0))
-        self.assertEqual(p.command(8.5), (0.3, 0.0))   # vuelve a empezar
-
-    def test_aleatorio_mantiene_el_comando_entre_cambios(self):
-        p = RandomPattern(rng=random.Random(3))
-        first = p.command(0.0)
-        self.assertEqual(p.command(0.5), first)
-        self.assertIn(first, [(0.3, 0.0), (0.0, 1.0), (0.0, -1.0)])
-
-    def test_perimetro(self):
-        self.assertEqual(PerimeterPattern().command(12.0), (0.2, 0.0))
 
 
 if __name__ == '__main__':

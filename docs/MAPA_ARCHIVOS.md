@@ -20,12 +20,10 @@ lawn-mower-robot/
 ├── README.md
 ├── bridge/                      Puente app (MQTT) <-> ROS 2, corre en la Pi
 ├── docs/                        Instructivos y documentación
-│   ├── hardware/                Reglas udev de los puertos USB
-│   ├── diagrams/                (vacía)
-│   └── reports/                 (vacía)
+│   └── hardware/                Reglas udev de los puertos USB
 ├── firmware/                    Programa del ESP32 (PlatformIO, C++)
 │   ├── src/                     Programas principales (uno por "env")
-│   │   └── test_sketches/       Programas de prueba de una sola pieza
+│   │   └── test_sketches/       Pruebas sueltas de la batería y la pantalla
 │   ├── lib/                     Librerías propias: motores, sensores, pantalla...
 │   │   ├── battery/  bumper/  buzzer/  diffdrive/  display/
 │   │   ├── encoder/  motor/  pid/  sonar/
@@ -41,7 +39,6 @@ lawn-mower-robot/
 │   │   ├── test/                Tests de la app
 │   │   ├── tools/               Robot falso para probar la app
 │   │   └── docs/ref/            Imagen de referencia del diseño
-│   └── releases/                (vacía)
 ├── mow_simplified/              Modelo 3D del robot (URDF) exportado de SolidWorks
 │   ├── urdf/  meshes/  launch/  config/  scripts/
 ├── pi_setup/                    Configuración de la Raspberry Pi (ventilador)
@@ -54,17 +51,11 @@ lawn-mower-robot/
 │       ├── lawnbot_vision/      Cámara + modelo de segmentación (pasto y obstáculos)
 │       ├── lawnbot_hardware/    Motores de corte y sensor TF-mini
 │       ├── berryimu_gps/        IMU (BerryIMU) y GPS
-│       ├── mow_simplified ->    Enlace a ../../mow_simplified (para que ROS encuentre el URDF)
-│       ├── lawnbot_bringup/     (vacía, no se usa)
-│       ├── lawnbot_msgs/        (vacía, no se usa)
-│       └── lawnbot_navigation/  (vacía, no se usa)
-├── tests/                       (vacía; los tests están en cada paquete)
+│       └── mow_simplified ->    Enlace a ../../mow_simplified (para que ROS encuentre el URDF)
 └── vision/                      Modelos de visión y scripts sueltos de prueba
     ├── models/ncnn_320/         Modelo que usa el robot
     ├── models/ncnn_640/         Modelo más grande
-    ├── pi_scripts/              Scripts sueltos (antes de ROS)
-    ├── training/                (vacía)
-    └── dataset_tools/           (vacía)
+    └── pi_scripts/              Scripts sueltos (antes de ROS)
 ```
 
 ## Carpetas y archivos
@@ -114,7 +105,6 @@ Se compila y se carga con PlatformIO desde la laptop. Cada "env" de `platformio.
   ESP32 o del cable (env `microros_min`).
 - `src/test_sketches/test_bat_manager.cpp`: prueba suelta del medidor de batería (env `test_battery`).
 - `src/test_sketches/test_display.cpp`: prueba suelta de la pantalla OLED (env `test_display`).
-- `src/test_sketches/main.cpp`: prueba vieja de micro-ROS. **(viejo / no se usa: ningún env la compila)**.
 - `lib/motor/`: manejo de un motor (PWM y dirección).
 - `lib/encoder/`: lectura de los encoders de las ruedas.
 - `lib/pid/`: controlador PID de velocidad de cada rueda.
@@ -128,7 +118,7 @@ Se compila y se carga con PlatformIO desde la laptop. Cada "env" de `platformio.
 - `lib/task_logic/TaskLogic.h`: reglas de `mow_tasks` sin hardware (cuándo se habilitan los motores, detección
   de levantado, sonidos): se pueden probar en la PC.
 - `test/host/test_task_logic.cpp`: tests de `TaskLogic.h` que corren en la PC con `g++`.
-- `.vscode/`: configuración del editor. `browse.vc.db.lock` es **(viejo / no se usa: archivo temporal del editor)**.
+- `.vscode/`: configuración del editor (sus archivos temporales están en `.gitignore`).
 
 ### `mobile_app/lawnbot_app/` — app del celular (Flutter)
 
@@ -166,7 +156,6 @@ Exportado de SolidWorks. ROS lo usa para saber dónde está montado cada sensor 
 - `scripts/joint_state_from_odom.py`: calcula el giro de las ruedas a partir de la odometría, para verlas girar en
   RViz.
 - `launch/display.launch`: muestra el modelo en RViz.
-- `launch/gazebo.launch`: simulación en Gazebo con ROS 1. **(viejo / no se usa)**.
 - `config/joint_names_mow_simplified.yaml`: nombres de las articulaciones (exportado).
 - `meshes/`: piezas 3D (STL).
 - `CMakeLists.txt`, `package.xml`: definición del paquete ROS.
@@ -226,10 +215,8 @@ Cadena de las órdenes de movimiento: algoritmos y app → `twist_mux` (elige po
 **Simulación** (para probar sin el robot)
 - `fake_robot.py`, `sim_robot.py`, `sim_world.py`, `sim_view.py`: robot y mundo simulados, y su dibujo en RViz.
 
-**Reemplazos de prueba**
+**Reemplazo de prueba**
 - `vision_stub.py`: reemplaza a la cámara (publica "sin pasto, sin obstáculos"). Solo con `use_vision_stub:=true`.
-- `nav_stub.py` / `nav_patterns.py`: movimientos fijos a ciegas para cada modo. **(viejo / no se usa: los
-  reemplazaron los nodos reales; solo con `use_<modo>_stub:=true`)**.
 
 **Configuración (`config/`)**: un `.yaml` por nodo, con el mismo nombre (`safety_gate.yaml`, `random_walk.yaml`,
 etc.). Además:
@@ -237,7 +224,6 @@ etc.). Además:
 - `robot_geometry.yaml`: ángulo de los sonares y separación de las ruedas (compartido por varios nodos).
 - `waypoint_follower_map.yaml`: seguidor en el robot real; `waypoint_follower.yaml`: con un cuadrado de ejemplo.
 - `sim_room.yaml`, `sim_field.yaml`, `sim.rviz`: mundos del simulador y la vista de RViz.
-- `nav_stubs.yaml`: patrones de los stubs. **(viejo / no se usa)**.
 
 **Herramientas (`tools/`)**
 - `fake_ros.py` + `node_scenarios.py`: prueban los nodos completos sin ROS instalado (escenarios).
@@ -280,7 +266,6 @@ etc.). Además:
 - `berryimu_gps/calibrate_accel.py`, `calibrate_gyro.py`, `calibrate_mag.py`: calibración del acelerómetro,
   giroscopio y magnetómetro.
 - `config/imu_calibration.yaml`: resultados de esa calibración.
-- `berryimu_gps/setup.py`: **(viejo / no se usa: copia suelta; el que vale es el `setup.py` del paquete)**.
 - `test/`: tests del IMU y el GPS.
 
 ### `vision/` — modelos y scripts sueltos
@@ -288,9 +273,6 @@ etc.). Además:
 - `models/ncnn_320/`: **el modelo que usa el robot** (YOLOv8n-seg, 320 px, 7 clases). `metadata.yaml` tiene las
   clases.
 - `models/ncnn_640/`: el mismo modelo a 640 px. **(no se usa en la Pi: es más lento)**.
-- `models/*/model_ncnn.py`: script de prueba que generó el export en Colab. **(viejo / no se usa)**.
-- `pi_scripts/calibrar.py`: calibración vieja con ultralytics. **(viejo / no se usa: reemplazado por
-  `ros2 run lawnbot_vision calibrar`)**.
 - `pi_scripts/pi_infer.py`, `pi_stream.py`, `vision_core.py`, `potential_field.py`: pruebas de visión antes de
   ROS. **(viejo / no se usa: reemplazados por `lawnbot_vision` y `lawnbot_nav/potential_field.py`)**.
 

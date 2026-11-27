@@ -1541,14 +1541,19 @@ def run_vision():
     from lawnbot_vision.vision_node import VisionNode
     cfg = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.dirname(HERE)), 'lawnbot_vision', 'config', 'vision.yaml')))
     cfg = cfg['vision_node']['ros__parameters']
-    check(cfg['calibrated'] is False and cfg['source'] == '0', 'vision.yaml: arranca sin calibrar')
+    from lawnbot_vision.vision_logic import validate_calibration
+    check(validate_calibration(cfg['calib_y'], cfg['calib_d']) is None and cfg['source'].startswith('/dev/v4l/by-id/')
+          and cfg['stale_s'] > 1.0 / cfg['process_rate_hz'],
+          'vision.yaml: calibracion valida, camara por nombre fijo y stale_s mayor que el periodo de inferencia')
 
-    n = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1))
+    n = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1, calibrated=False))
     check(n.thread is None and n.get_logger().has('calibrated=false', 'WARN'), 'sin calibrar: avisa en el log (y sin camara en la prueba)')
-    tick = n.timer(0.2)
+    tick = n.timer(1.0 / cfg['publish_rate_hz'])
     grass, obst = n.pubs['vision/grass_present'], n.pubs['vision/obstacles']
     tick()
-    check(grass.last.data is False and obst.last.poses == [], 'sin ningun dato: grass_present=false y obstaculos vacios')
+    # /vision/obstacles sale una vez por inferencia: sin ningun dato no se publica (o sale vacio)
+    check(grass.last.data is False and (obst.last is None or obst.last.poses == []),
+          'sin ningun dato: grass_present=false y ningun obstaculo')
     check(n.pubs['vision/status'].last.data == 'sin_datos', '   y vision/status = sin_datos')
 
     n.on_detection(0.4, [Detection('arbol', 320, 360)], 640)
@@ -1557,8 +1562,10 @@ def run_vision():
     check(obst.last.poses == [], 'sin calibrar: /vision/obstacles vacio aunque haya un arbol')
     check('SIN_CALIBRAR' in n.pubs['vision/status'].last.data, '   y vision/status lo dice')
 
-    c = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1, calibrated=True, cam_x=0.2))
-    ctick = c.timer(0.2)
+    # calibracion de ejemplo fija (no la del robot): fila 360 = 1,0 m
+    c = make(VisionNode, **dict(cfg, start_capture=False, grass_window=1, calibrated=True, cam_x=0.2,
+                                calib_y=[300.0, 420.0], calib_d=[1.5, 0.5]))
+    ctick = c.timer(1.0 / cfg['publish_rate_hz'])
     c.on_detection(0.4, [Detection('arbol', 320, 360), Detection('caminero', 100, 400)], 640)
     ctick()
     poses = c.pubs['vision/obstacles'].last.poses
@@ -1569,10 +1576,10 @@ def run_vision():
     R.advance(0.5)
     ctick()
     check(c.pubs['vision/grass_present'].last.data is True, 'resultado de 0,5 s: todavia vigente')
-    R.advance(0.8)
+    R.advance(cfg['stale_s'])
     ctick()
     check(c.pubs['vision/grass_present'].last.data is False and c.pubs['vision/obstacles'].last.poses == [],
-          'resultado de mas de stale_s (1 s): grass_present=false y obstaculos vacios')
+          f'resultado de mas de stale_s ({cfg["stale_s"]} s): grass_present=false y obstaculos vacios')
     check(c.pubs['vision/status'].last.data == 'sin_datos', '   y status sin_datos')
 
     c.on_detection(0.4, [], 640)
@@ -1597,7 +1604,7 @@ def run_vision():
     t = make(VisionNode, **dict(cfg, start_capture=False))
     t.capture_loop()
     check(t.get_logger().has('vision no arranca', 'ERROR'), 'si el modelo o la camara no cargan: error claro en el log, sin caerse')
-    t.timer(0.2)()
+    t.timer(1.0 / cfg['publish_rate_hz'])()
     check(t.pubs['vision/grass_present'].last.data is False, '   y publica grass_present=false')
 
 

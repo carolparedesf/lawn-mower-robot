@@ -18,7 +18,6 @@ bridge ◄── /nav/active_mode, /nav/safety_alert, /battery/state   (→ robo
 |---|---|
 | `bridge/bridge.py` | MQTT ↔ ROS. `robot/status` lleva el modo real (`/nav/active_mode`), la batería real y la alerta |
 | `mode_manager` | `/robot_mode` → `/nav/active_mode`. Modo desconocido o sin heartbeat por 3 s → `idle` |
-| `nav_stub` ×3 | Patrones a ciegas (paralelo, aleatorio, perímetro) a 20 Hz mientras su modo está activo |
 | `twist_mux` | Prioridad: manual > perimeter > parallel > random, timeouts 0,5 s. Salida `/cmd_vel_mux` |
 | `safety_gate` | Filtra `/cmd_vel_mux` y publica `/cmd_vel` a 20 Hz. Solo limita o anula. Fusiona las alertas de `/nav/alert_in` |
 | `geofence_node` | Cerco virtual: `/geofence_raw` (lat/lon) → polígono en `map`, `/geofence/inside`, `/geofence/distance_to_edge` |
@@ -103,7 +102,7 @@ Atención: el firmware entra en e-stop (enganchado) si se presionan a la vez B3+
 Al probar bumpers, apretar uno solo. Para liberar: `ros2 topic pub --once /estop std_msgs/msg/Bool "{data: false}"`.
 
 **1. En seco, sin agente.** `ros2 launch lawnbot_nav nav.launch.py`. Sin errores; `ros2 node list` muestra
-`mode_manager`, `nav_stub_*`, `twist_mux`, `safety_gate`. Con `ros2 topic echo /cmd_vel` debe haber ceros a 20 Hz.
+`mode_manager`, `twist_mux`, `safety_gate` y los nodos de los modos. Con `ros2 topic echo /cmd_vel` debe haber ceros a 20 Hz.
 
 **2. Entradas a mano** (con `ros2 topic echo /cmd_vel_mux` y `/cmd_vel` abiertos). Los sensores hacen falta
 (paso 4), si no el avance sale bloqueado.
@@ -334,8 +333,6 @@ ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map  # seguidor en f
   Si llega un cerco corregido mientras se espera, se genera en ese momento.
 - Al salir de `auto_parallel` (o al apagar el nodo) publica una ruta vacía y borra los markers.
 - **Valores provisorios:** `cutting_width` 0,30 m (medir el real) y `margin` 1,0 m (tiene que ser mayor que la dispersión real del GPS).
-- `nav.launch.py` **ya no lanza `nav_stub_parallel`** (`use_parallel_stub:=false` por defecto); si no, el patrón a ciegas tomaría el mando
-  cuando el seguidor termina o se pausa. `use_parallel_stub:=true` lo vuelve a encender.
 - `config/waypoint_follower_map.yaml`: el seguidor en `map` (las rutas por topic deben venir en su mismo frame; el cuadrado de ejemplo en `odom`
   y la cobertura en `map` no pueden convivir en un mismo seguidor).
 
@@ -361,8 +358,7 @@ ros2 launch lawnbot_nav waypoint_follower.launch.py config:=map  # seguidor en f
 Los dos publican en su propio topic (`/cmd_vel_random`, `/cmd_vel_perimeter`, entradas de `twist_mux`) y pasan por el `safety_gate`: ninguno
 publica en `/cmd_vel`. Solo actúan con su modo activo (`auto_random` / `auto_perimeter`, vía `/nav/active_mode`; sin mensaje de modo en 3 s se
 consideran inactivos), publican a 20 Hz, publican cero al desactivarse y al apagarse, y no hacen nada fuera de su modo. `nav.launch.py` los
-lanza y apaga los stubs viejos (`use_random_stub` / `use_perimeter_stub` en `false` por defecto: encenderlos junto al nodo real daría dos
-publicadores en el mismo topic). Velocidades máximas: 0,2 m/s (random) y 0,15 m/s (perimeter).
+lanza (los stubs a ciegas que había antes se borraron). Velocidades máximas: 0,2 m/s (random) y 0,15 m/s (perimeter).
 
 ### random_walk (`config/random_walk.yaml`)
 
@@ -455,7 +451,7 @@ usa si `corner_sonar_angle_deg` es válido (≥ 20°)**; si no, se ignora el son
 hacia afuera un ángulo respecto del frente (0° = al frente, 90° = de costado; izquierdo `+`, derecho `−`). Vale **30° provisorio** hasta medirlo y vive **solo** en
 `config/robot_geometry.yaml` (`/**: ros__parameters: corner_sonar_angle_deg`). Lo leen `fake_robot` (`sim_world.launch.py`), `potential_field`, `coverage_map` y `perimeter` (`nav.launch.py`;
 en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de los sonares del URDF:
-- `mow_simplified/urdf/mow_simplified.urdf.xacro` es la **fuente** y `mow_simplified.urdf` (el que usan `localization.launch.py`, `display.launch` y `gazebo.launch`) es el **generado**: tras cambiar el ángulo,
+- `mow_simplified/urdf/mow_simplified.urdf.xacro` es la **fuente** y `mow_simplified.urdf` (el que usan `localization.launch.py` y `display.launch`) es el **generado**: tras cambiar el ángulo,
   correr `mow_simplified/scripts/generate_urdf.sh` (hace falta `xacro`: ROS 2 o `pip install xacro`) y commitear los dos. `test_robot_geometry.py` falla si el `.urdf` quedó desfasado del YAML.
 - **Ruedas motrices:** `wheel_separation` (0,355 m entre centros, igual que `base_width` del firmware) está en el mismo YAML; el xacro pone las ruedas en y = ±`wheel_separation`/2 (±0,1775 m; antes
   ±0,18 m del export de SolidWorks). El simulador usa `base_width` 0,355 (`fake_robot` / `sim_robot`); `sim_world` no modela la colisión de las ruedas (el cuerpo es la huella del chasis).
