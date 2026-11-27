@@ -9,6 +9,11 @@ la app en robot/status.alert): inside y distance_to_edge siguen midiendo el bord
 El cerco se guarda siempre en lat/lon y se reconvierte con el servicio fromLL de
 navsat_transform cada vez que este vuelve a estar disponible. No mueve el robot, asi que corre en
 cualquier modo. Sin pose, sin poligono o con el poligono sin reconvertir, `inside` es false.
+
+La pose sale de /odometry/global (`pose_topic`, ekf_global, 10 Hz: base_footprint en map) y no de
+un TransformListener, que en la Pi recibiria todo /tf a 25 Hz (ver odom_pose.py). Si deja de
+llegar o es mas vieja que pose_timeout, el estado pasa a NO_POSE (desconocido), inside a false y
+distance_to_edge a NaN: safety_gate frena en los modos automaticos igual que antes.
 """
 import math
 import time
@@ -20,7 +25,6 @@ from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
 from std_msgs.msg import Bool, Float32, String
-from tf2_ros import Buffer, TransformListener
 
 from lawnbot_nav.geofence_logic import (ALERT_BREACH, STATUS_INVALID, STATUS_NO_POLYGON,
                                         STATUS_NO_POSE, STATUS_OK, STATUS_WAITING,
@@ -29,7 +33,7 @@ from lawnbot_nav.geofence_logic import (ALERT_BREACH, STATUS_INVALID, STATUS_NO_
                                         load_geofence, parse_geofence_json, save_geofence,
                                         signed_distance, validate_polygon)
 from lawnbot_nav.node_utils import spin_with_cleanup
-from lawnbot_nav.tf_utils import lookup_pose
+from lawnbot_nav.odom_pose import DEFAULT_TOPIC as ODOM_TOPIC, OdomPose
 
 LATCHED = QoSProfile(
     history=HistoryPolicy.KEEP_LAST, depth=1,
@@ -48,6 +52,7 @@ class GeofenceNode(Node):
         d('datum_lng', 0.0)
         d('frame_id', 'map')
         d('base_frame', 'base_footprint')
+        d('pose_topic', ODOM_TOPIC)         # nav_msgs/Odometry de base_frame en frame_id (ekf_global)
         d('pose_timeout', 0.5)
         d('rate_hz', 10.0)
         d('hysteresis_in', 5)               # lecturas consecutivas "dentro" para pasar a true
@@ -91,8 +96,8 @@ class GeofenceNode(Node):
         self.last_status = None
         self.last_status_pub = 0.0
 
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.odom_pose = OdomPose(self, gp('pose_topic').value, self.frame_id, self.base_frame)
+        self.had_pose = None                # para loguear solo los cambios
 
         self.client = None
         if self.mode == 'navsat':
@@ -234,7 +239,7 @@ class GeofenceNode(Node):
         self.publish_status(self.compute_status(self.get_pose()), force=True)
 
     def get_pose(self):
-        return lookup_pose(self, self.tf_buffer, self.frame_id, self.base_frame, self.pose_timeout)
+        return self.odom_pose.get(self.pose_timeout)
 
     def usable(self):
         return self.poly is not None and not self.stale and not self.error
@@ -254,6 +259,14 @@ class GeofenceNode(Node):
 
     def tick(self):
         pose = self.get_pose()
+        if (pose is not None) != self.had_pose:
+            if pose is None:
+                self.get_logger().warn(
+                    f'sin pose: /{self.odom_pose.topic} no llega o tiene mas de {self.pose_timeout:.1f} s; '
+                    'cerco desconocido (NO_POSE, inside false)')
+            elif self.had_pose is not None:
+                self.get_logger().info(f'pose de /{self.odom_pose.topic} recuperada')
+            self.had_pose = pose is not None
         distance = math.nan
         raw_inside = None
         if self.usable() and pose is not None:

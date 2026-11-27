@@ -12,6 +12,8 @@ berryimu_driver:
     mag_offset_x: 0.0547
     mag_offset_y: 0.3795
     mag_offset_z: -0.0557
-    publish_rate_hz: 50.0
+    # 25 Hz (antes 50): el EKF solo usa la velocidad angular z y corre a 15 / 10 Hz. Las ganancias del
+    # filtro complementario se escalan con el dt (imu_filter.py), asi que no hay que retocarlas
+    publish_rate_hz: 25.0
     # Calibra el giroscopio al arrancar (robot quieto ~3 s); sobreescribe gyro_bias_*
     auto_calibrate_gyro: true

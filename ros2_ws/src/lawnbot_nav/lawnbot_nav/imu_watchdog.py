@@ -6,8 +6,9 @@ detiene los modos automaticos mientras la alerta este vigente; el modo manual si
 cada segundo (el gate la vence a los `alert_ttl` s) y al volver el IMU publica `imu:none`. imu_timeout <= 0 lo apaga.
 
 Tambien publica la inclinacion en /imu/tilt_deg (Float32, grados) a rate_hz, solo cuando llego una muestra nueva del
-IMU desde el ciclo anterior: blade_controller la lee de ahi en vez de suscribirse el tambien a /imu/data (50 Hz).
-En la Pi 4 cada suscripcion a /imu/data cuesta ~16 % de un nucleo aunque el callback no haga nada; asi hay una sola.
+IMU desde el ciclo anterior: blade_controller la lee de ahi en vez de suscribirse el tambien a /imu/data (25 Hz).
+En la Pi 4 cada suscripcion a /imu/data cuesta ~8 % de un nucleo (~16 % cuando era a 50 Hz) aunque el callback no
+haga nada; asi hay una sola. imu_timeout 0,5 s = 12 periodos del IMU a 25 Hz.
 El mensaje llega sin deserializar (raw) y se deserializa solo la ultima muestra, una vez por ciclo.
 """
 import time

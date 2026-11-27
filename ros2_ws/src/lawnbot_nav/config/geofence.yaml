@@ -9,7 +9,8 @@ geofence_node:
 
     frame_id: map
     base_frame: base_footprint
-    pose_timeout: 0.5           # s: pose mas vieja que esto = desconocida (inside false)
+    pose_topic: odometry/global   # pose de ekf_global (10 Hz); antes TF map->base_footprint (/tf a 25 Hz)
+    pose_timeout: 0.5           # s: sin /odometry/global por mas de esto = NO_POSE (inside false, safety_gate frena en automatico)
     rate_hz: 10.0
 
     # Histeresis de /geofence/inside (lecturas consecutivas a rate_hz). Con el error del GPS

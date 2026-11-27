@@ -223,7 +223,7 @@ Recibe `/geofence_raw` (el JSON de la app: `{"points":[{"lat":..,"lng":..}, ...]
 - **Validación:** mínimo 4 vértices (si el último repite al primero se descarta), aristas de al menos 0,5 m, área de al menos 2 m²
   y polígono simple (sin autointersecciones ni vértices que rocen otra arista). Se normaliza a sentido antihorario. La app deja enviar
   3 puntos; el nodo los rechaza (`INVALID:menos de 4 vertices`).
-- **Falla segura:** sin cerco, sin pose (TF ausente o de más de 0,5 s) o con el cerco sin reconvertir, `inside` es `false` y la
+- **Falla segura:** sin cerco, sin pose (`/odometry/global` de ekf_global ausente o de más de `pose_timeout` 0,5 s; el estado queda `NO_POSE` y safety_gate frena en los modos automáticos) o con el cerco sin reconvertir, `inside` es `false` y la
   distancia `NaN`. Un valor desconocido apaga `inside` de inmediato, sin esperar la histéresis.
 - **Conversión:** con el servicio **`/fromLL` de `navsat_transform`** (`robot_localization/srv/FromLL`), es decir, con la misma
   transformación que usa el filtro. El cerco se guarda siempre en lat/lon (también en `~/.ros/lawnbot_geofence.json`, así sobrevive
@@ -316,7 +316,7 @@ sigue "girando") y, en `ekf_global`, sin yaw absoluto. Por eso:
   con prioridad justo debajo de `estop`.
 - `fake_robot` publica un `/imu/data` ideal (`imu_rate_hz`, 20 por defecto; 0 = no publica, para probar la pérdida) para que la simulación no dispare la alerta. Escenario [22] de `tools/node_scenarios.py`.
 - Límite: si el propio `imu_watchdog` no corre, no hay alerta (falla abierta). Con `nav.launch.py` arranca siempre. Al levantar el stack puede verse un `imu_lost` breve hasta que llega el primer mensaje del IMU.
-- Es la **única suscripción a `/imu/data` de `lawnbot_nav`** (cada una cuesta ~16 % de un núcleo de la Pi 4 a 50 Hz, aunque el callback no haga nada). También publica la inclinación en
+- Es la **única suscripción a `/imu/data` de `lawnbot_nav`** (cada una cuesta ~8 % de un núcleo de la Pi 4 a 25 Hz, aunque el callback no haga nada). El IMU publica a 25 Hz (`publish_rate_hz` en `berryimu_gps/config/imu_calibration.yaml`; antes 50): el EKF solo usa la velocidad angular z y corre a 15 / 10 Hz, e `imu_timeout` de 0,5 s son 12 períodos. Las ganancias del filtro complementario de `imu_node` se escalan con el `dt` (`imu_filter.py`), así que la inclinación reacciona igual que a 50 Hz. También publica la inclinación en
   **`/imu/tilt_deg`** (Float32, grados) a 10 Hz, una por cada muestra nueva del IMU; `blade_controller` la lee de ahí. Si `imu_watchdog` no corre, la inclinación envejece y la cuchilla se apaga (`imu_sin_dato`).
 
 ## Bloque B: cobertura en líneas paralelas (`coverage_parallel`)
@@ -508,7 +508,7 @@ en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de 
    robot quede dentro del cerco con al menos `--margin` (0,4 m) hasta el borde. Si algo falla imprime el motivo, **no** imprime comandos y sale con código 2 (1 si no puede leer el cerco).
    Con `room` el cerco tiene que caber en 10 × 8 m y contener el arranque (2, 1) con margen. No hace falta ROS. Si `nav.launch.py` ya estaba corriendo con otro datum, reiniciarlo: `geofence_node` no aplica el datum en caliente.
 
-   **Posición del robot en la app (simulación).** En el robot real `robot/position` sale de la TF `map -> base_footprint` pasada a lat/lng con el servicio `toLL` de navsat_transform (y del GPS crudo de gpsd si no hay TF; ver `bridge/fused_position.py`). En simulación no hay GPS ni navsat, así que el robot no aparece en el mapa de la app. El bridge tiene una opción, **apagada por defecto**,
+   **Posición del robot en la app (simulación).** En el robot real `robot/position` sale de la pose de ekf_global (`/odometry/global`, `map -> base_footprint`) pasada a lat/lng con el servicio `toLL` de navsat_transform (y del GPS crudo de gpsd si no hay pose; ver `bridge/fused_position.py`). En simulación no hay GPS ni navsat, así que el robot no aparece en el mapa de la app. El bridge tiene una opción, **apagada por defecto**,
    que toma la pose de la TF `map → base_footprint`, la convierte a lat/lng con el **mismo datum** que `geofence_node` (modo `datum`, misma `meters_per_degree`, así el robot cae dentro del cerco dibujado) y publica
    `robot/position` a 1 Hz con el JSON de siempre `{"lat", "lng", "hdg"}`. El rumbo `hdg` es como el de gpsd (grados desde el norte, sentido horario; yaw 0 = este = 90°). Con la opción activa **no se conecta a gpsd**
    (ni hace falta tenerlo instalado); si no hay TF o es vieja (> 2 s) no publica nada. Sin la opción el bridge es el de siempre y no necesita `sim_position.py` ni `lawnbot_nav`.
@@ -555,8 +555,8 @@ en `perimeter` es el `side_sonar_angle_deg` de antes), y de ahí sale el yaw de 
 
 ### CPU de los nodos en la Pi 4
 
-Medido en la Pi (Humble, rclpy): cada mensaje que recibe un nodo Python cuesta ~2-3 ms de CPU aunque el callback no haga nada (`/imu/data` a 50 Hz ≈ 16 % de un núcleo,
-`/tf` a 25 Hz ≈ 10 %, 5 bumpers a 5 Hz ≈ 5 %). Por eso `random_walk`, `perimeter` y `potential_field` **no reciben sensores, distancia al cerco ni TF mientras su modo no está activo**:
+Medido en la Pi (Humble, rclpy): cada mensaje que recibe un nodo Python cuesta ~3 ms de CPU aunque el callback no haga nada (`/imu/data` a 50 Hz ≈ 16 % de un núcleo,
+`/tf` a 25 Hz ≈ 10 %, 5 bumpers a 5 Hz ≈ 5 %), y algo más cuantas más suscripciones tiene el nodo. Por eso el IMU va a 25 Hz y `geofence_node`, `coverage_map` y el bridge leen la pose de `/odometry/global` (10 Hz) en vez de escuchar `/tf` (con la pose a 10 Hz: 11,6 % de un núcleo con TF contra 5,5 %). Por eso `random_walk`, `perimeter` y `potential_field` **no reciben sensores, distancia al cerco ni TF mientras su modo no está activo**:
 se suscriben al llegar su modo por `/nav/active_mode` y esperan el primer dato de cada sensor (como mucho 1 s) antes de arrancar, así no arrancan con `sensor_timeout`.
 Al salir del modo publican los ceros de siempre y se desuscriben (`lawnbot_nav/active_resources.py`). El `safety_gate`, `geofence_node` y `coverage_map` siguen suscriptos siempre.
 
@@ -742,7 +742,7 @@ Sin dato válido de batería (0 V = INA228 sin conectar) no se avisa. El primer 
   ```
 - **`position_source` en `gps_raw` o `none`:** el bridge loguea cuál de las dos piezas falta y por qué
   (`journalctl -u bridge.service | grep FUSIONADA`, se repite cada 30 s). Los motivos posibles son:
-  - falta la TF `map -> base_footprint` (ekf_global) o está vieja;
+  - falta la pose de ekf_global (`/odometry/global`) o está vieja;
   - el servicio `toLL` no está disponible;
   - `toLL` responde `(0, 0)`, que es lo que hace navsat_transform mientras no tiene su transformación porque
     todavía no le llegó ningún fix bueno por `/gps/fix`. El mensaje dice hace cuánto llegó el último `/gps/fix`. Si

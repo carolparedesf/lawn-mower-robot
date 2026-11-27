@@ -10,7 +10,7 @@ mientras la app los mantenga: un `true` vale solo `enable_timeout` (2 s) desde s
 apaga de inmediato, y sin pedidos (o al arrancar) esta todo apagado. force_cut anula SOLO la condicion de pasto.
 
 La inclinacion llega ya calculada por /imu/tilt_deg (la publica imu_watchdog a 10 Hz con cada muestra nueva del IMU):
-suscribirse a /imu/data (50 Hz) costaba ~16 % de un nucleo de la Pi solo en recibir. Si imu_watchdog no corre o el
+suscribirse a /imu/data (entonces a 50 Hz) costaba ~16 % de un nucleo de la Pi solo en recibir. Si imu_watchdog no corre o el
 IMU se pierde, el dato envejece y a los imu_timeout s la cuchilla se apaga, como antes.
 """
 import time

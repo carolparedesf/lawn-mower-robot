@@ -7,6 +7,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu, MagneticField
 import smbus2
 
+from berryimu_gps.imu_filter import GAIN_REF_HZ, rate_scaled_gain
+
 AG_ADDR = 0x6A
 M_ADDR = 0x1C
 
@@ -61,7 +63,9 @@ class BerryIMUDriver(Node):
         self.declare_parameter('mag_offset_x', 0.0)
         self.declare_parameter('mag_offset_y', 0.0)
         self.declare_parameter('mag_offset_z', 0.0)
-        self.declare_parameter('publish_rate_hz', 50.0)
+        # 25 Hz: el EKF solo usa la velocidad angular z y corre a 15 / 10 Hz; cada
+        # mensaje de /imu/data cuesta ~3 ms de CPU a cada suscriptor rclpy de la Pi
+        self.declare_parameter('publish_rate_hz', 25.0)
         self.declare_parameter('auto_calibrate_gyro', False)
 
         self.declare_parameter('frame_id', 'BerryIMU_Link')
@@ -71,9 +75,12 @@ class BerryIMUDriver(Node):
         self.declare_parameter('mag_sign_x', 1.0)
         self.declare_parameter('mag_sign_y', 1.0)
         self.declare_parameter('mag_sign_z', 1.0)
-        # Filtro complementario
+        # Filtro complementario: correccion por muestra a gain_ref_hz. Con otra
+        # frecuencia se escala con el dt real (imu_filter.py), asi la constante de
+        # tiempo no depende de publish_rate_hz (accel ~1 s, mag ~2 s)
         self.declare_parameter('accel_gain', 0.02)
         self.declare_parameter('mag_gain', 0.01)
+        self.declare_parameter('gain_ref_hz', GAIN_REF_HZ)
         self.declare_parameter('accel_gate', 2.0)  # m/s2 de desvio respecto a g
         # Covarianzas [rad^2] y [(rad/s)^2]
         self.declare_parameter('roll_pitch_variance', 0.01)
@@ -108,6 +115,7 @@ class BerryIMUDriver(Node):
         self.frame_id = self.get_parameter('frame_id').value
         self.accel_gain = self.get_parameter('accel_gain').value
         self.mag_gain = self.get_parameter('mag_gain').value
+        self.gain_ref_hz = self.get_parameter('gain_ref_hz').value
         self.accel_gate = self.get_parameter('accel_gate').value
         self.rp_var = self.get_parameter('roll_pitch_variance').value
         self.yaw_var = self.get_parameter('yaw_variance').value
@@ -235,13 +243,15 @@ class BerryIMUDriver(Node):
         # Correccion roll/pitch con el acelerometro, solo si no hay aceleracion fuerte
         a_norm = math.sqrt(ax * ax + ay * ay + az * az)
         if abs(a_norm - GRAVITY) < self.accel_gate:
-            self.roll += self.accel_gain * wrap_pi(roll_acc - self.roll)
-            self.pitch += self.accel_gain * wrap_pi(pitch_acc - self.pitch)
+            k = rate_scaled_gain(self.accel_gain, dt, self.gain_ref_hz)
+            self.roll += k * wrap_pi(roll_acc - self.roll)
+            self.pitch += k * wrap_pi(pitch_acc - self.pitch)
 
         # Correccion de yaw con el magnetometro
         if mag:
             yaw_m = self.mag_yaw(*mag, self.roll, self.pitch)
-            self.yaw += self.mag_gain * wrap_pi(yaw_m - self.yaw)
+            k = rate_scaled_gain(self.mag_gain, dt, self.gain_ref_hz)
+            self.yaw += k * wrap_pi(yaw_m - self.yaw)
 
         self.roll = wrap_pi(self.roll)
         self.pitch = wrap_pi(self.pitch)

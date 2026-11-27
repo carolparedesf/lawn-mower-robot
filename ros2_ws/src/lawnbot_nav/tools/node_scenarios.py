@@ -33,6 +33,20 @@ def make(cls, **params):
     return cls()
 
 
+def odom_fed(node, tick):
+    """tick() precedido del /odometry/global que publicaria ekf_global con la pose falsa de map -> base_footprint.
+
+    Sin esa pose (R.drop_pose) no llega ningun mensaje: el nodo se queda con el ultimo, que envejece.
+    """
+    def fed():
+        pose = R.TF['poses'].get(('map', 'base_footprint'))
+        if pose is not None and 'odometry/global' in node.subs:
+            x, y, yaw, stamp = pose
+            node.subs['odometry/global'](R.Odometry(x=x, y=y, yaw=yaw, stamp_ns=stamp))
+        tick()
+    return fed
+
+
 def geo_json(points):
     return json.dumps({'points': [{'lat': lat, 'lng': lng} for lat, lng in points]})
 
@@ -50,7 +64,9 @@ def run_geofence_datum():
     persist = os.path.join(tmp, 'cerco.json')
     g = make(GeofenceNode, conversion_mode='datum', datum_lat=LAT0, datum_lng=LNG0,
              persist_path=persist, hysteresis_in=3, hysteresis_out=2)
-    tick, maintain = g.timer(0.1), g.timer(1.0)
+    tick, maintain = odom_fed(g, g.timer(0.1)), g.timer(1.0)
+    check('odometry/global' in g.subs and 'tf_listener' not in g.__dict__,
+          'geofence_node lee la pose de /odometry/global, sin TransformListener')
     last = lambda name: g.pubs[name].last   # noqa: E731
 
     def run(n=1):
@@ -106,10 +122,29 @@ def run_geofence_datum():
     check(last('geofence/inside').data is False, 'tras 2 lecturas fuera: inside=false')
     check(last('geofence/distance_to_edge').data < 0, 'distancia negativa afuera')
 
-    R.drop_pose('map', 'base_footprint')
-    run(1)
-    check(last('geofence/inside').data is False and math.isnan(last('geofence/distance_to_edge').data),
-          'sin pose: inside=false de inmediato y NaN')
+    for _ in range(6):                                  # de vuelta al centro, pose fresca en cada ciclo
+        R.advance(0.1)
+        R.set_pose('map', 'base_footprint', 10.0, 11.0)
+        tick()
+    check(last('geofence/inside').data is True, 'de vuelta adentro: inside=true')
+    R.drop_pose('map', 'base_footprint')          # /odometry/global deja de llegar
+    run(4)
+    check(last('geofence/inside').data is True and last('geofence/status').data == 'OK',
+          'sin /odometry/global hace 0,4 s (< pose_timeout 0,5 s): sigue la ultima pose')
+    run(2)
+    check(last('geofence/status').data == 'NO_POSE' and last('geofence/inside').data is False
+          and math.isnan(last('geofence/distance_to_edge').data),
+          'sin /odometry/global por mas de pose_timeout: NO_POSE (desconocido), inside=false y NaN')
+    check(g.get_logger().has('cerco desconocido (NO_POSE', 'WARN'), '   y lo avisa en el log')
+    import yaml
+    from lawnbot_nav.safety_gate import SafetyGate
+    gate_cfg = yaml.safe_load(open(os.path.join(os.path.dirname(HERE), 'config', 'safety_gate.yaml')))['safety_gate']['ros__parameters']
+    gate = make(SafetyGate, **gate_cfg)
+    gate.subs['geofence/status'](R.String(last('geofence/status').data))
+    gate.subs['geofence/inside'](last('geofence/inside'))
+    gate.subs['nav/active_mode'](R.String('auto_random'))
+    check(gate.build_state(R.MONO['t']).outside_fence_auto,
+          '   y safety_gate frena en modo automatico (outside_fence)')
     R.set_pose('map', 'base_footprint', 10.0, 11.0)
     R.advance(0.6)
     g.get_pose()
@@ -142,7 +177,7 @@ def run_geofence_navsat():
     from lawnbot_nav.geofence_node import GeofenceNode
     g = make(GeofenceNode, conversion_mode='navsat', persist_path='', hysteresis_in=1, hysteresis_out=1)
     client = g.clients['fromLL']
-    tick, maintain = g.timer(0.1), g.timer(1.0)
+    tick, maintain = odom_fed(g, g.timer(0.1)), g.timer(1.0)
     last = lambda name: g.pubs[name].last   # noqa: E731
 
     def answer(offset, zeros=False):
@@ -1933,7 +1968,7 @@ def run_geofence_restore_equals_topic():
     persist = os.path.join(tmp, 'cerco.json')
 
     def observe(g, poses):
-        tick, maintain = g.timer(0.1), g.timer(1.0)
+        tick, maintain = odom_fed(g, g.timer(0.1)), g.timer(1.0)
         out = []
         for pose in poses:
             for _ in range(5):
@@ -1971,7 +2006,7 @@ def run_geofence_restore_equals_topic():
             g.subs['geofence_raw'](R.String(geo_json(SQUARE_LL)))
         maintain = g.timer(1.0)
         R.set_pose('map', 'base_footprint', 10.0, 11.0)
-        g.timer(0.1)()
+        odom_fed(g, g.timer(0.1))()
         first = (g.pubs['geofence/status'].last.data if g.pubs['geofence/status'].last else None)
         client.ready = True
         maintain()                                          # el servicio aparece: reconvierte
@@ -2271,7 +2306,7 @@ def run_imu_watchdog():
             R.advance(0.05)
             if state['imu'] and R.MONO['t'] >= state['imu_next']:
                 wd.subs['imu/data'](R.Imu())
-                state['imu_next'] = R.MONO['t'] + 0.02                 # 50 Hz
+                state['imu_next'] = R.MONO['t'] + 0.04                 # 25 Hz (publish_rate_hz del IMU)
             if int(round(R.MONO['t'] * 20)) % 2 == 0:
                 wd_tick()
             for m in wd.pubs['nav/alert_in'].sent[state['sent']:]:

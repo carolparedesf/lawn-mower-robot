@@ -2,10 +2,11 @@ imu_watchdog:
   ros__parameters:
     imu_topic: imu/data
     # Sin mensajes de /imu/data por mas de esto [s]: alerta imu_lost y el safety_gate detiene los modos automaticos
-    # (el manual sigue libre). Con el IMU perdido el EKF solo predice el giro. <= 0 apaga el vigilante
+    # (el manual sigue libre). Con el IMU perdido el EKF solo predice el giro. <= 0 apaga el vigilante.
+    # Con el IMU a 25 Hz son 12 periodos: margen de sobra para el jitter de la Pi cargada
     imu_timeout: 0.5
     rate_hz: 10.0
     # Inclinacion para blade_controller (grados), una por ciclo con cada muestra nueva del IMU. Es la unica
-    # suscripcion a /imu/data de lawnbot_nav: cada una cuesta ~16 % de un nucleo de la Pi
+    # suscripcion a /imu/data de lawnbot_nav: cada una cuesta ~8 % de un nucleo de la Pi a 25 Hz
     tilt_topic: imu/tilt_deg
     renew_period_s: 1.0
